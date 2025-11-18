@@ -23,7 +23,12 @@ const UserSchema = new mongoose.Schema(
     telegramId: {
       type: String,
       required: false,
-    }
+    },
+    defaultCurrency: {
+      type: String,
+      required: true,
+      default: 'THB'
+    },
   },
   {
     timestamps: true

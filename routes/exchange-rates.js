@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { getRates, updateRates } = require('../services/exchangeRateService');
+const { ALL_CURRENCIES } = require('../utils/currency.utils');
 
 // GET /api/exchange-rates/current — вернуть актуальные курсы
 router.get('/current', async (req, res) => {
@@ -35,6 +36,30 @@ router.get('/current', async (req, res) => {
     console.error('Error getting exchange rates:', error);
     res.status(500).json({
       error: 'Failed to retrieve exchange rates',
+      message: error.message
+    });
+  }
+});
+
+// GET /api/exchange-rates/currencies — вернуть список всех валют
+router.get('/currencies', async (req, res) => {
+  try {
+    // Преобразуем объект в массив для удобства использования на фронтенде
+    const currencies = Object.entries(ALL_CURRENCIES)
+      .map(([code, name]) => ({
+        code,
+        name
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)); // Сортировка по названию валюты
+
+    res.status(200).json({
+      currencies,
+      count: currencies.length
+    });
+  } catch (error) {
+    console.error('Error getting currencies list:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve currencies list',
       message: error.message
     });
   }

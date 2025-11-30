@@ -181,12 +181,14 @@ router.post('/funds/transfer',
     ]
 );
 
-// GET /api/funds/total — вернуть общую сумму по всем фондам в базовой валюте
+// GET /api/funds/total — вернуть общую сумму по всем фондам в базовой валюте пользователя
 router.get('/funds/total', 
     [
+        checkAccessToken,
         async (req, res) => {
             try {
-                const userId = new ObjectId(req.query.userId);
+                const userId = new ObjectId(req.user.id);
+                const userCurrency = req.user.defaultCurrency || 'USD';
 
                 // Получаем все фонды пользователя
                 const funds = await Fund.find({ userId });
@@ -194,7 +196,7 @@ router.get('/funds/total',
                 if (funds.length === 0) {
                     return res.status(200).json({
                         total: 0,
-                        baseCurrency: 'USD',
+                        baseCurrency: userCurrency,
                         fundsCount: 0
                     });
                 }
@@ -218,37 +220,51 @@ router.get('/funds/total',
                     Object.assign(rates, exchangeRates.rates);
                 }
 
-                const baseCurrency = exchangeRates.base;
-                let total = 0;
+                const systemBaseCurrency = exchangeRates.base; // Обычно USD
+                let totalInSystemBase = 0; // Сумма в системной базовой валюте (USD)
 
-                // Конвертируем каждый баланс в базовую валюту
+                // Конвертируем каждый баланс в системную базовую валюту (USD)
                 for (const fund of funds) {
                     const fundCurrency = fund.currency;
                     const fundBalance = fund.currentBalance;
 
-                    if (fundCurrency === baseCurrency) {
-                        // Если валюта фонда совпадает с базовой, просто добавляем баланс
-                        total += fundBalance;
+                    if (fundCurrency === systemBaseCurrency) {
+                        // Если валюта фонда совпадает с системной базовой, просто добавляем баланс
+                        totalInSystemBase += fundBalance;
                     } else {
-                        // Конвертируем в базовую валюту
-                        // Курс хранится как: 1 базовая валюта = X целевая валюта
+                        // Конвертируем в системную базовую валюту
+                        // Курс хранится как: 1 системная базовая валюта = X целевая валюта
                         // Поэтому для конвертации: баланс / курс
                         const rate = rates[fundCurrency];
                         
                         if (!rate) {
                             console.warn(`Exchange rate not found for currency: ${fundCurrency}`);
-                            // Если курс не найден, пропускаем этот фонд или используем 0
+                            // Если курс не найден, пропускаем этот фонд
                             continue;
                         }
 
                         const convertedBalance = fundBalance / rate;
-                        total += convertedBalance;
+                        totalInSystemBase += convertedBalance;
+                    }
+                }
+
+                // Теперь конвертируем из системной базовой валюты в валюту пользователя
+                let total = totalInSystemBase;
+                if (userCurrency !== systemBaseCurrency) {
+                    const userCurrencyRate = rates[userCurrency];
+                    if (!userCurrencyRate) {
+                        console.warn(`Exchange rate not found for user currency: ${userCurrency}`);
+                        // Если курс не найден, возвращаем в системной базовой валюте
+                        total = totalInSystemBase;
+                    } else {
+                        // Конвертируем: сумма в USD * курс валюты пользователя
+                        total = totalInSystemBase * userCurrencyRate;
                     }
                 }
 
                 res.status(200).json({
                     total: Math.round(total * 100) / 100, // Округляем до 2 знаков после запятой
-                    baseCurrency,
+                    baseCurrency: userCurrency,
                     fundsCount: funds.length
                 });
             } catch (error) {

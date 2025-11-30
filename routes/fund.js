@@ -2,6 +2,7 @@ const router = require('express').Router();
 const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
 const {checkAccessToken} = require('../middlewares/checkAuth');
+const { getRates } = require('../services/exchangeRateService');
 const mongoose = require("mongoose");
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -179,6 +180,86 @@ router.post('/funds/transfer',
         }
     ]
 );
+
+// GET /api/funds/total — вернуть общую сумму по всем фондам в базовой валюте
+router.get('/funds/total', 
+    [
+        async (req, res) => {
+            try {
+                const userId = new ObjectId(req.query.userId);
+
+                // Получаем все фонды пользователя
+                const funds = await Fund.find({ userId });
+
+                if (funds.length === 0) {
+                    return res.status(200).json({
+                        total: 0,
+                        baseCurrency: 'USD',
+                        fundsCount: 0
+                    });
+                }
+
+                // Получаем курсы валют
+                const exchangeRates = await getRates();
+                
+                if (!exchangeRates) {
+                    return res.status(404).json({
+                        error: 'Exchange rates not found. Please update rates first.'
+                    });
+                }
+
+                // Преобразуем Map в объект для удобства работы
+                const rates = {};
+                if (exchangeRates.rates instanceof Map) {
+                    exchangeRates.rates.forEach((value, key) => {
+                        rates[key] = value;
+                    });
+                } else {
+                    Object.assign(rates, exchangeRates.rates);
+                }
+
+                const baseCurrency = exchangeRates.base;
+                let total = 0;
+
+                // Конвертируем каждый баланс в базовую валюту
+                for (const fund of funds) {
+                    const fundCurrency = fund.currency;
+                    const fundBalance = fund.currentBalance;
+
+                    if (fundCurrency === baseCurrency) {
+                        // Если валюта фонда совпадает с базовой, просто добавляем баланс
+                        total += fundBalance;
+                    } else {
+                        // Конвертируем в базовую валюту
+                        // Курс хранится как: 1 базовая валюта = X целевая валюта
+                        // Поэтому для конвертации: баланс / курс
+                        const rate = rates[fundCurrency];
+                        
+                        if (!rate) {
+                            console.warn(`Exchange rate not found for currency: ${fundCurrency}`);
+                            // Если курс не найден, пропускаем этот фонд или используем 0
+                            continue;
+                        }
+
+                        const convertedBalance = fundBalance / rate;
+                        total += convertedBalance;
+                    }
+                }
+
+                res.status(200).json({
+                    total: Math.round(total * 100) / 100, // Округляем до 2 знаков после запятой
+                    baseCurrency,
+                    fundsCount: funds.length
+                });
+            } catch (error) {
+                console.error('Error calculating total funds:', error);
+                res.status(500).json({
+                    error: 'Failed to calculate total funds',
+                    message: error.message
+                });
+            }
+        }
+    ]);
 
 // GET /api/funds/:id
 router.get('/funds/:id', async (req, res) => {

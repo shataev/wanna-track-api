@@ -1,8 +1,10 @@
 const router = require('express').Router();
 const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
+const User = require('../models/User');
 const {checkAccessToken} = require('../middlewares/checkAuth');
 const { getRates } = require('../services/exchangeRateService');
+const { calculateTotalFundsAmount } = require('../utils/fund.utils');
 const mongoose = require("mongoose");
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -15,9 +17,31 @@ router.get('/funds', async (req, res) => {
             userId: userId,
         })
 
+        // Get user's base currency from database
+        let userCurrency = 'USD';
+        if (req.user && req.user.defaultCurrency) {
+            userCurrency = req.user.defaultCurrency;
+        } else {
+            // If req.user is not available, get currency from database
+            const user = await User.findById(userId);
+            if (user && user.defaultCurrency) {
+                userCurrency = user.defaultCurrency;
+            }
+        }
+
+        // Calculate total amount across all funds
+        const totalFunds = await calculateTotalFundsAmount(userId, userCurrency);
+
         res
             .status(200)
-            .json(funds);
+            .json({
+                funds,
+                total: totalFunds ? {
+                    amount: totalFunds.total,
+                    currency: totalFunds.baseCurrency,
+                    fundsCount: totalFunds.fundsCount
+                } : null
+            });
     } catch (error) {
         console.log(error)
         res
@@ -181,7 +205,7 @@ router.post('/funds/transfer',
     ]
 );
 
-// GET /api/funds/total — вернуть общую сумму по всем фондам в базовой валюте пользователя
+// GET /api/funds/total — return total amount across all funds in user's base currency
 router.get('/funds/total', 
     [
         checkAccessToken,
@@ -190,83 +214,15 @@ router.get('/funds/total',
                 const userId = new ObjectId(req.user.id);
                 const userCurrency = req.user.defaultCurrency || 'USD';
 
-                // Получаем все фонды пользователя
-                const funds = await Fund.find({ userId });
+                const totalFunds = await calculateTotalFundsAmount(userId, userCurrency);
 
-                if (funds.length === 0) {
-                    return res.status(200).json({
-                        total: 0,
-                        baseCurrency: userCurrency,
-                        fundsCount: 0
-                    });
-                }
-
-                // Получаем курсы валют
-                const exchangeRates = await getRates();
-                
-                if (!exchangeRates) {
+                if (!totalFunds) {
                     return res.status(404).json({
                         error: 'Exchange rates not found. Please update rates first.'
                     });
                 }
 
-                // Преобразуем Map в объект для удобства работы
-                const rates = {};
-                if (exchangeRates.rates instanceof Map) {
-                    exchangeRates.rates.forEach((value, key) => {
-                        rates[key] = value;
-                    });
-                } else {
-                    Object.assign(rates, exchangeRates.rates);
-                }
-
-                const systemBaseCurrency = exchangeRates.base; // Обычно USD
-                let totalInSystemBase = 0; // Сумма в системной базовой валюте (USD)
-
-                // Конвертируем каждый баланс в системную базовую валюту (USD)
-                for (const fund of funds) {
-                    const fundCurrency = fund.currency;
-                    const fundBalance = fund.currentBalance;
-
-                    if (fundCurrency === systemBaseCurrency) {
-                        // Если валюта фонда совпадает с системной базовой, просто добавляем баланс
-                        totalInSystemBase += fundBalance;
-                    } else {
-                        // Конвертируем в системную базовую валюту
-                        // Курс хранится как: 1 системная базовая валюта = X целевая валюта
-                        // Поэтому для конвертации: баланс / курс
-                        const rate = rates[fundCurrency];
-                        
-                        if (!rate) {
-                            console.warn(`Exchange rate not found for currency: ${fundCurrency}`);
-                            // Если курс не найден, пропускаем этот фонд
-                            continue;
-                        }
-
-                        const convertedBalance = fundBalance / rate;
-                        totalInSystemBase += convertedBalance;
-                    }
-                }
-
-                // Теперь конвертируем из системной базовой валюты в валюту пользователя
-                let total = totalInSystemBase;
-                if (userCurrency !== systemBaseCurrency) {
-                    const userCurrencyRate = rates[userCurrency];
-                    if (!userCurrencyRate) {
-                        console.warn(`Exchange rate not found for user currency: ${userCurrency}`);
-                        // Если курс не найден, возвращаем в системной базовой валюте
-                        total = totalInSystemBase;
-                    } else {
-                        // Конвертируем: сумма в USD * курс валюты пользователя
-                        total = totalInSystemBase * userCurrencyRate;
-                    }
-                }
-
-                res.status(200).json({
-                    total: Math.round(total * 100) / 100, // Округляем до 2 знаков после запятой
-                    baseCurrency: userCurrency,
-                    fundsCount: funds.length
-                });
+                res.status(200).json(totalFunds);
             } catch (error) {
                 console.error('Error calculating total funds:', error);
                 res.status(500).json({

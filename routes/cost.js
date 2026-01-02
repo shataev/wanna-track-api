@@ -13,13 +13,12 @@ router.get('/costs', async (req, res) => {
         const userId = new ObjectId(req.query.userId);
         const {dateFrom, dateTo} = req.query;
 
-        const allCosts = await Cost.find({
-            user: userId,
-            createdAt: {
-                $gte: dateFrom,
-                $lt: dateTo
-            }
-        })
+        // Get user's base currency
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        const userCurrency = user.defaultCurrency || 'USD';
 
         const costs = await Cost.aggregate([
             {
@@ -40,14 +39,14 @@ router.get('/costs', async (req, res) => {
             },
             {
                 $lookup: {
-                    from: 'categories', // Replace with the actual name of your "themes" collection
-                    localField: 'category', // Field in the "posts" collection
-                    foreignField: '_id', // Field in the "themes" collection
-                    as: 'category', // Create a new field named "theme" with the matching theme document
+                    from: 'categories',
+                    localField: 'category',
+                    foreignField: '_id',
+                    as: 'category',
                 },
             },
             {
-                $unwind: '$category', // Unwind the "category" array created by $lookup
+                $unwind: '$category',
             },
             {
                 $lookup: {
@@ -60,16 +59,54 @@ router.get('/costs', async (req, res) => {
             {
                 $unwind: {
                     path: '$fund',
-                    preserveNullAndEmptyArrays: true // Если у расхода нет фонда, оставляем null
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                // Calculate amount in user's base currency: amount * rate
+                $addFields: {
+                    amountInUserCurrency: {
+                        $round: [
+                            {
+                                $multiply: ['$amount', '$rate']
+                            },
+                            0
+                        ]
+                    }
                 }
             },
             {
                 $group: {
                     _id: '$category._id',
-                    amount: { $sum: '$amount' },
+                    amount: { 
+                        $sum: '$amountInUserCurrency' // Sum converted amounts
+                    },
                     category: {$first: '$category.name'},
                     icon: {$first: '$category.icon'},
-                    costs: { $push: '$$ROOT' },
+                    costs: { 
+                        $push: {
+                            _id: '$_id',
+                            amount: '$amount',
+                            currency: '$currency',
+                            rate: '$rate',
+                            amountInUserCurrency: '$amountInUserCurrency',
+                            comment: '$comment',
+                            date: '$date',
+                            createdAt: '$createdAt',
+                            updatedAt: '$updatedAt',
+                            fund: '$fund',
+                            category: '$category'
+                        }
+                    },
+                }
+            },
+            {
+                // Round the total amount to integer
+                $addFields: {
+                    amount: {
+                        $round: ['$amount', 0]
+                    },
+                    currency: userCurrency // Add user's base currency to response
                 }
             },
             {

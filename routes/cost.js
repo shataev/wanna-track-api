@@ -63,6 +63,17 @@ router.get('/costs', async (req, res) => {
                 }
             },
             {
+                // Handle old records without currency/rate: treat as user's base currency
+                $addFields: {
+                    currency: {
+                        $ifNull: ['$currency', userCurrency]
+                    },
+                    rate: {
+                        $ifNull: ['$rate', 1]
+                    }
+                }
+            },
+            {
                 // Calculate amount in user's base currency: amount * rate
                 $addFields: {
                     amountInUserCurrency: {

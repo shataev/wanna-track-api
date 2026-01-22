@@ -7,6 +7,14 @@ const CostSchema = new mongoose.Schema(
             type: Number,
             required: true,
         },
+        currency: {
+            type: String,
+            required: true,
+        },
+        rate: {
+            type: Number,
+            required: true,
+        },
         category: {
             type: Schema.Types.ObjectId,
             ref: "Category",

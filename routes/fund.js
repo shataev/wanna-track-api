@@ -1,7 +1,10 @@
 const router = require('express').Router();
 const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
+const User = require('../models/User');
 const {checkAccessToken} = require('../middlewares/checkAuth');
+const { getRates } = require('../services/exchangeRateService');
+const { calculateTotalFundsAmount } = require('../utils/fund.utils');
 const mongoose = require("mongoose");
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -14,9 +17,31 @@ router.get('/funds', async (req, res) => {
             userId: userId,
         })
 
+        // Get user's base currency from database
+        let userCurrency = 'USD';
+        if (req.user && req.user.defaultCurrency) {
+            userCurrency = req.user.defaultCurrency;
+        } else {
+            // If req.user is not available, get currency from database
+            const user = await User.findById(userId);
+            if (user && user.defaultCurrency) {
+                userCurrency = user.defaultCurrency;
+            }
+        }
+
+        // Calculate total amount across all funds
+        const totalFunds = await calculateTotalFundsAmount(userId, userCurrency);
+
         res
             .status(200)
-            .json(funds);
+            .json({
+                funds,
+                total: totalFunds ? {
+                    amount: totalFunds.total,
+                    currency: totalFunds.baseCurrency,
+                    fundsCount: totalFunds.fundsCount
+                } : null
+            });
     } catch (error) {
         console.log(error)
         res
@@ -35,7 +60,8 @@ router.post('/funds', async (req, res) => {
         userId,
         description,
         initialBalance,
-        isDefault
+        isDefault,
+        currency
     } = req.body;
 
     try {
@@ -46,6 +72,7 @@ router.post('/funds', async (req, res) => {
             initialBalance,
             currentBalance: initialBalance,
             isDefault,
+            currency,
             userId: userId ? new ObjectId(userId) : null
         });
 
@@ -65,14 +92,14 @@ router.post('/funds', async (req, res) => {
 // Update fund
 router.put('/funds/:id', async (req, res) => {
     const {id} = req.params;
-    const {name, description, currentBalance, icon, isDefault} = req.body;
+    const {name, description, currentBalance, icon, isDefault, currency} = req.body;
 
     try {
         const oldFund = await Fund.findById(id);
 
         const fund = await Fund.findByIdAndUpdate(
             id,
-            {name, description, currentBalance, icon, isDefault},
+            {name, description, currentBalance, icon, isDefault, currency},
             {new: true}
         );
 
@@ -178,6 +205,34 @@ router.post('/funds/transfer',
     ]
 );
 
+// GET /api/funds/total — return total amount across all funds in user's base currency
+router.get('/funds/total', 
+    [
+        checkAccessToken,
+        async (req, res) => {
+            try {
+                const userId = new ObjectId(req.user.id);
+                const userCurrency = req.user.defaultCurrency || 'USD';
+
+                const totalFunds = await calculateTotalFundsAmount(userId, userCurrency);
+
+                if (!totalFunds) {
+                    return res.status(404).json({
+                        error: 'Exchange rates not found. Please update rates first.'
+                    });
+                }
+
+                res.status(200).json(totalFunds);
+            } catch (error) {
+                console.error('Error calculating total funds:', error);
+                res.status(500).json({
+                    error: 'Failed to calculate total funds',
+                    message: error.message
+                });
+            }
+        }
+    ]);
+
 // GET /api/funds/:id
 router.get('/funds/:id', async (req, res) => {
     const {id} = req.params;
@@ -198,6 +253,7 @@ router.get('/funds/:id', async (req, res) => {
             createdAt: fund.createdAt,
             updatedAt: fund.updatedAt,
             isDefault: fund.isDefault,
+            currency: fund.currency,
         });
     } catch (error) {
         console.error('Get fund error:', error);

@@ -19,6 +19,10 @@ const FundSchema = new mongoose.Schema(
     initialBalance: { type: Number, required: true },
     currentBalance: { type: Number, required: true },
     isDefault: { type: Boolean, default: false },
+    currency: {
+      type: String,
+      required: true,
+    },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },

@@ -33,12 +33,13 @@ module.exports = {
             return null
         }
 
-        const {username, email, _id: id} = user;
+        const {username, email, _id: id, defaultCurrency} = user;
 
         return {
             email,
             username,
-            id
+            id,
+            defaultCurrency
         }
     }
 }

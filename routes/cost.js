@@ -28,7 +28,7 @@ router.get('/costs', async (req, res) => {
                             user: userId,
                         },
                         {
-                            createdAt: {
+                            date: {
                                 $gte: new Date(dateFrom),
                                 $lt: new Date(dateTo)
                             }

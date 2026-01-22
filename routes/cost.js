@@ -79,7 +79,7 @@ router.get('/costs', async (req, res) => {
                     amountInUserCurrency: {
                         $round: [
                             {
-                                $multiply: ['$amount', '$rate']
+                                $multiply: ['$amount', '$rate'] 
                             },
                             0
                         ]

@@ -10,7 +10,6 @@ const exchangeRatesRoute = require('./routes/exchange-rates');
 const cors = require('cors');
 const cookieParser = require("cookie-parser");
 const {Telegraf} = require("telegraf");
-const {initBot} = require("./telagramBot");
 const { startExchangeRateCron } = require("./jobs/exchangeRateCron");
 
 const PORT = process.env.PORT || 8900;
@@ -48,9 +47,6 @@ app.use('/api/auth', authRoute);
 app.use('/api', [costRoute, categoryRoute, fundsRoute]);
 app.use('/api/verify', verifyRoute);
 app.use('/api/exchange-rates', exchangeRatesRoute);
-
-// Telegram bot
-initBot();
 
 // Start exchange rate cron job
 startExchangeRateCron();

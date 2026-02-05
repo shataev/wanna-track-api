@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const authRoute = require('./routes/auth');
+const telegramRoute = require('./routes/telegram');
 const costRoute = require('./routes/cost');
 const verifyRoute = require('./routes/verify');
 const categoryRoute = require('./routes/category');
@@ -44,6 +45,7 @@ app.use(express.json());
 
 // Routes
 app.use('/api/auth', authRoute);
+app.use('/api/auth', telegramRoute);
 app.use('/api', [costRoute, categoryRoute, fundsRoute]);
 app.use('/api/verify', verifyRoute);
 app.use('/api/exchange-rates', exchangeRatesRoute);

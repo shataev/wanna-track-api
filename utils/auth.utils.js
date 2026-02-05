@@ -33,13 +33,15 @@ module.exports = {
             return null
         }
 
-        const {username, email, _id: id, defaultCurrency} = user;
+        const {username, email, _id: id, defaultCurrency, telegramId, verified} = user;
 
         return {
             email,
             username,
             id,
-            defaultCurrency
+            defaultCurrency,
+            telegramId,
+            verified
         }
     }
 }

@@ -81,6 +81,27 @@ router.post('/telegram-bind', checkTelegramBotSecret, async (req, res) => {
   }
 });
 
+// Get user id by Telegram ID (for bot use; requires x-telegram-bot-secret header)
+router.get('/user-by-telegram/:telegramId', checkTelegramBotSecret, async (req, res) => {
+  try {
+    const { telegramId } = req.params;
+    if (!telegramId) {
+      return res.status(400).json({ message: 'Missing telegramId' });
+    }
+
+    const user = await User.findOne({ telegramId: String(telegramId) }).select('_id').lean();
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found for this Telegram ID' });
+    }
+
+    res.status(200).json({ id: user._id.toString() });
+  } catch (error) {
+    console.error('[user-by-telegram]', error);
+    res.status(500).json({ message: 'Failed to get user by Telegram ID' });
+  }
+});
+
 // Unbind Telegram account from the authenticated user
 router.post('/telegram-unbind', checkAccessToken, async (req, res) => {
   try {

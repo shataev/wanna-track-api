@@ -45,7 +45,7 @@ app.use(express.json());
 
 // Routes
 app.use('/api/auth', authRoute);
-app.use('/api/auth', telegramRoute);
+app.use('/api/telegram', telegramRoute);
 app.use('/api', [costRoute, categoryRoute, fundsRoute]);
 app.use('/api/verify', verifyRoute);
 app.use('/api/exchange-rates', exchangeRatesRoute);

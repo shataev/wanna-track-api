@@ -10,7 +10,6 @@ const fundsRoute = require('./routes/fund');
 const exchangeRatesRoute = require('./routes/exchange-rates');
 const cors = require('cors');
 const cookieParser = require("cookie-parser");
-const {Telegraf} = require("telegraf");
 const { startExchangeRateCron } = require("./jobs/exchangeRateCron");
 
 const PORT = process.env.PORT || 8900;

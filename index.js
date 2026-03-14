@@ -16,13 +16,13 @@ const PORT = process.env.PORT || 8900;
 
 dotenv.config();
 
-mongoose.connect(process.env.MONGO_URL)
-  .then(() => {
-      console.log('DB successfully connected!')
-  })
-  .catch(e => {
-      console.log(e)
-  })
+// mongoose.connect(process.env.MONGO_URL)
+//   .then(() => {
+//       console.log('DB successfully connected!')
+//   })
+//   .catch(e => {
+//       console.log(e)
+//   })
 
 const app = express();
 
@@ -53,6 +53,23 @@ app.use('/api/exchange-rates', exchangeRatesRoute);
 startExchangeRateCron();
 
 // Server starting
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`)
-})
+// app.listen(PORT, () => {
+//     console.log(`Server is running on port ${PORT}`)
+// })
+
+async function start() {
+    try {
+      await mongoose.connect(process.env.MONGO_URL);
+      console.log("DB successfully connected!");
+  
+      app.listen(PORT, () => {
+        console.log(`Server is running on port ${PORT}`);
+      });
+  
+    } catch (e) {
+      console.error(e);
+      process.exit(1);
+    }
+  }
+  
+  start();

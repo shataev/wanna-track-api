@@ -82,6 +82,101 @@ POST /api/funds/transfer
 }
 ```
 
+`amount` is in the currency of the source fund. When the two funds hold
+different currencies the amount is converted at the stored exchange rate and
+rounded to the precision of the target currency, so the response reports both
+sides of the operation:
+
+```json
+{
+    "message": "Transferred successfully!",
+    "withdrawn": { "amount": 1000000, "currency": "VND" },
+    "credited": { "amount": 1270.95, "currency": "THB" },
+    "rate": 0.0012709542237442923
+}
+```
+
+## Known Issues
+
+Both of the below touch how fund balances are written. They are known, they
+predate the multi-currency work, and they are meant to be picked up together
+as a separate feature — the same handlers have to be rewritten for either one,
+so doing them in one pass is cheaper than twice.
+
+### Balance updates are not atomic
+
+`POST /api/funds/transfer` performs four independent writes: two
+`FundTransaction` documents and two `$inc` updates, one per fund. Each write is
+atomic on its own, the sequence is not. If the process dies between the debit
+and the credit, the money is withdrawn and never arrives. It cannot be
+recovered afterwards: a balance is stored on the fund as a number rather than
+derived from the transaction history, so nothing recomputes it.
+
+`POST /api/cost` has the same gap on a smaller scale — the fund balance is
+saved first and the `Cost` document after it, so a crash in between leaves
+money spent with no expense recorded.
+
+The realistic trigger is not exotic: a CapRover redeploy, an OOM kill or a
+dropped Atlas connection while a request is in flight.
+
+Multi-document transactions need a replica set, and every Atlas cluster
+(including the free M0 tier) is one, so the fix is available without changing
+infrastructure:
+
+```js
+const session = await mongoose.startSession();
+
+try {
+  await session.withTransaction(async () => {
+    await outgoingTransaction.save({ session });
+    await incomingTransaction.save({ session });
+    await Fund.findByIdAndUpdate(fromFundId, { $inc: { currentBalance: -withdrawnAmount } }, { session });
+    await Fund.findByIdAndUpdate(toFundId, { $inc: { currentBalance: creditedAmount } }, { session });
+  });
+} finally {
+  await session.endSession();
+}
+```
+
+Worth knowing before starting:
+
+- every operation inside the block needs `{ session }`; one that is missing it
+  silently escapes the transaction and survives a rollback
+- `withTransaction` may run the callback again after a transient error such as
+  a primary re-election, so it must hold no side effects outside the database
+- a standalone local `mongod` rejects transactions with
+  `Transaction numbers are only allowed on a replica set member`; run the test
+  container with `--replSet` to reproduce the production setup
+
+### Concurrent operations can overdraw a fund
+
+The balance check and the balance update are separate steps. In
+`POST /api/funds/transfer` the handler reads the fund, compares
+`currentBalance` against the requested amount, and only later applies `$inc`.
+Two requests that arrive together both pass the check and both go through,
+leaving the fund negative.
+
+`POST /api/cost` is worse, because it does a read-modify-write
+(`fund.currentBalance -= amount; await fund.save()`): of two concurrent
+expenses, one decrement can be lost entirely and the balance ends up higher
+than it should be.
+
+A transaction alone does not fix this — the stale read happens inside it just
+as well. The check has to move into the update itself, so the database
+evaluates the condition:
+
+```js
+const updated = await Fund.findOneAndUpdate(
+  { _id: fromFundId, currentBalance: { $gte: withdrawnAmount } },
+  { $inc: { currentBalance: -withdrawnAmount } },
+  { new: true, session }
+);
+
+if (!updated) {
+  return res.status(400).json({ error: 'Insufficient amount of money in source fund' });
+}
+```
+
 ## Technologies Used
 
 - Node.js

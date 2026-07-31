@@ -3,8 +3,9 @@ const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
 const User = require('../models/User');
 const {checkAccessToken} = require('../middlewares/checkAuth');
-const { getRates } = require('../services/exchangeRateService');
+const { getRatesObject } = require('../services/exchangeRateService');
 const { calculateTotalFundsAmount } = require('../utils/fund.utils');
+const { getConversionRate, roundToCurrencyPrecision } = require('../utils/currency.utils');
 const mongoose = require("mongoose");
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -155,6 +156,12 @@ router.post('/funds/transfer',
                     return res.status(400).json({error: 'Funds must be different'});
                 }
 
+                const withdrawnAmount = Number(amount);
+
+                if (!Number.isFinite(withdrawnAmount) || withdrawnAmount <= 0) {
+                    return res.status(400).json({error: 'Amount must be a positive number'});
+                }
+
                 // Find both funds and check ownership in a single query
                 const funds = await Fund.find({
                     _id: { $in: [fromFundId, toFundId] },
@@ -168,18 +175,54 @@ router.post('/funds/transfer',
                 const fromFund = funds.find(fund => fund._id.toString() === fromFundId);
                 const toFund = funds.find(fund => fund._id.toString() === toFundId);
 
-                if (fromFund.currentBalance < amount) {
+                if (fromFund.currentBalance < withdrawnAmount) {
                     return res.status(400).json({error: 'Insufficient amount of money in source fund'});
                 }
 
-                //return res.status(200).json({message: `fromFund: ${fromFund}, toFund: ${toFund}`})
+                // Сумма вводится в валюте фонда-источника, а зачислять её надо
+                // в валюте фонда-получателя
+                let creditedAmount = withdrawnAmount;
+                let rate = 1;
+
+                if (fromFund.currency !== toFund.currency) {
+                    const exchangeRates = await getRatesObject();
+
+                    if (!exchangeRates) {
+                        return res.status(404).json({
+                            error: 'Exchange rates not found. Please update rates first.'
+                        });
+                    }
+
+                    rate = getConversionRate(
+                        fromFund.currency,
+                        toFund.currency,
+                        exchangeRates.rates,
+                        exchangeRates.base
+                    );
+
+                    if (!rate) {
+                        return res.status(400).json({
+                            error: `Exchange rate not found for ${fromFund.currency} -> ${toFund.currency}`
+                        });
+                    }
+
+                    creditedAmount = roundToCurrencyPrecision(withdrawnAmount * rate, toFund.currency);
+
+                    // Донг дешевле бата в тысячи раз, поэтому мелкая сумма
+                    // после округления может превратиться в ноль
+                    if (creditedAmount <= 0) {
+                        return res.status(400).json({
+                            error: `Amount is too small to transfer to ${toFund.currency}`
+                        });
+                    }
+                }
 
                 // Create Transactions for each funds
                 const outgoingTransaction = new FundTransaction({
                     userId,
                     fundId: fromFundId,
                     type: 'transfer-out',
-                    amount: -amount,
+                    amount: -withdrawnAmount,
                     description,
                 });
                 await outgoingTransaction.save();
@@ -188,16 +231,21 @@ router.post('/funds/transfer',
                     userId,
                     fundId: toFundId,
                     type: 'transfer-in',
-                    amount,
+                    amount: creditedAmount,
                     description,
                 });
                 await incomingTransaction.save();
 
                 // Update funds
-                await Fund.findByIdAndUpdate(fromFundId, {$inc: {currentBalance: -amount}});
-                await Fund.findByIdAndUpdate(toFundId, {$inc: {currentBalance: amount}});
+                await Fund.findByIdAndUpdate(fromFundId, {$inc: {currentBalance: -withdrawnAmount}});
+                await Fund.findByIdAndUpdate(toFundId, {$inc: {currentBalance: creditedAmount}});
 
-                res.status(200).json("Transferred successfully!");
+                res.status(200).json({
+                    message: 'Transferred successfully!',
+                    withdrawn: { amount: withdrawnAmount, currency: fromFund.currency },
+                    credited: { amount: creditedAmount, currency: toFund.currency },
+                    rate
+                });
             } catch (error) {
                 res.status(500).json({error: error.message});
             }

@@ -15,6 +15,27 @@ async function getRates() {
   }
 }
 
+// В базе курсы лежат в Map, а потребителям удобнее обычный объект
+async function getRatesObject() {
+  const exchangeRate = await getRates();
+
+  if (!exchangeRate) {
+    return null;
+  }
+
+  const rates = {};
+
+  if (exchangeRate.rates instanceof Map) {
+    exchangeRate.rates.forEach((value, key) => {
+      rates[key] = value;
+    });
+  } else {
+    Object.assign(rates, exchangeRate.rates);
+  }
+
+  return { base: exchangeRate.base, rates, updatedAt: exchangeRate.updatedAt };
+}
+
 async function updateRates() {
   try {
     const API_KEY = process.env.EXCHANGE_RATE_API_KEY;
@@ -66,5 +87,5 @@ async function updateRates() {
   }
 }
 
-module.exports = { getRates, updateRates };
+module.exports = { getRates, getRatesObject, updateRates };
 

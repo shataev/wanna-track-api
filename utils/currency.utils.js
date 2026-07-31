@@ -355,8 +355,73 @@ function getCurrencySymbol(code) {
     return CURRENCY_SYMBOLS[code] || code; // Если символа нет, возвращаем код валюты
 }
 
+/**
+ * Курс перевода одной валюты в другую.
+ * Курсы хранятся в виде: 1 базовая валюта (обычно USD) = X целевой валюты,
+ * поэтому пересчёт идёт через базовую.
+ *
+ * @param {string} fromCurrency
+ * @param {string} toCurrency
+ * @param {Object<string, number>} rates
+ * @param {string} baseCurrency - база, в которой хранятся курсы
+ * @returns {number|null} - null, если для одной из валют нет курса
+ */
+function getConversionRate(fromCurrency, toCurrency, rates, baseCurrency) {
+    if (fromCurrency === toCurrency) {
+        return 1;
+    }
+
+    const fromRate = fromCurrency === baseCurrency ? 1 : rates[fromCurrency];
+    const toRate = toCurrency === baseCurrency ? 1 : rates[toCurrency];
+
+    if (!fromRate || !toRate) {
+        return null;
+    }
+
+    return toRate / fromRate;
+}
+
+// Сколько знаков после запятой у валюты: 0 у VND и JPY, 2 у THB и USD, 3 у KWD.
+// Intl уже знает эту таблицу, поэтому свою держать не нужно.
+const fractionDigitsCache = new Map();
+
+function getFractionDigits(currencyCode) {
+    if (!fractionDigitsCache.has(currencyCode)) {
+        let digits = 2;
+
+        try {
+            digits = new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: currencyCode
+            }).resolvedOptions().maximumFractionDigits;
+        } catch (error) {
+            // Код не похож на ISO 4217 — считаем, что знаков два
+        }
+
+        fractionDigitsCache.set(currencyCode, digits);
+    }
+
+    return fractionDigitsCache.get(currencyCode);
+}
+
+/**
+ * Округляет сумму до точности валюты: донги до целых, баты до сотых.
+ *
+ * @param {number} amount
+ * @param {string} currencyCode
+ * @returns {number}
+ */
+function roundToCurrencyPrecision(amount, currencyCode) {
+    const factor = 10 ** getFractionDigits(currencyCode);
+
+    return Math.round(amount * factor) / factor;
+}
+
 module.exports = {
     ALL_CURRENCIES,
     CURRENCY_SYMBOLS,
-    getCurrencySymbol
+    getCurrencySymbol,
+    getConversionRate,
+    getFractionDigits,
+    roundToCurrencyPrecision
 }

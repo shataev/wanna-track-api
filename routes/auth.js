@@ -1,11 +1,11 @@
 const router = require('express').Router();
-const {setRefreshTokenCookie} = require('../middlewares/setRefreshTokenCookie');
-const {createUser} = require("../middlewares/createUser");
-const {setAccessTokenToReq} = require("../middlewares/setAccessTokenToReq");
-const {checkUserInDatabase} = require("../middlewares/checkUserInDatabase");
-const {checkVerificationCodeHeader} = require("../middlewares/checkVerificationCodeHeader");
-const {checkAuth, checkAccessToken} = require("../middlewares/checkAuth");
-const {sendVerificationEmail} = require("../middlewares/sendVerificationEmail");
+const { setRefreshTokenCookie } = require('../middlewares/setRefreshTokenCookie');
+const { createUser } = require("../middlewares/createUser");
+const { setAccessTokenToReq } = require("../middlewares/setAccessTokenToReq");
+const { checkUserInDatabase } = require("../middlewares/checkUserInDatabase");
+const { checkVerificationCodeHeader } = require("../middlewares/checkVerificationCodeHeader");
+const { checkAccessToken } = require("../middlewares/checkAuth");
+const { sendVerificationEmail } = require("../middlewares/sendVerificationEmail");
 
 // Silent Authentication
 router.get('/', [

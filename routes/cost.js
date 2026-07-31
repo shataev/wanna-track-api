@@ -5,7 +5,8 @@ const ObjectId = mongoose.Types.ObjectId;
 const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
 const User = require('../models/User');
-const { getRates } = require('../services/exchangeRateService');
+const { getRatesObject } = require('../services/exchangeRateService');
+const { getConversionRate } = require('../utils/currency.utils');
 
 // Get all user's costs
 router.get('/costs', async (req, res) => {
@@ -178,64 +179,27 @@ router.post('/cost', async (req, res) => {
             const userCurrency = user.defaultCurrency || 'USD';
 
             // Get exchange rates
-            const exchangeRates = await getRates();
+            const exchangeRates = await getRatesObject();
             if (!exchangeRates) {
-                return res.status(404).json({ 
-                    error: 'Exchange rates not found. Please update rates first.' 
+                return res.status(404).json({
+                    error: 'Exchange rates not found. Please update rates first.'
                 });
             }
 
-            // Convert Map to object for easier handling
-            const rates = {};
-            if (exchangeRates.rates instanceof Map) {
-                exchangeRates.rates.forEach((value, key) => {
-                    rates[key] = value;
+            const { rates, base: systemBaseCurrency } = exchangeRates;
+
+            // Сколько единиц базовой валюты пользователя стоит одна единица
+            // валюты фонда: сумма расхода потом умножается на этот курс
+            rate = getConversionRate(currency, userCurrency, rates, systemBaseCurrency);
+
+            if (!rate) {
+                const missingCurrency = currency !== systemBaseCurrency && !rates[currency]
+                    ? currency
+                    : userCurrency;
+
+                return res.status(400).json({
+                    error: `Exchange rate not found for currency: ${missingCurrency}`
                 });
-            } else {
-                Object.assign(rates, exchangeRates.rates);
-            }
-
-            const systemBaseCurrency = exchangeRates.base; // Usually USD
-
-            // Calculate rate from fund currency to user's base currency
-            // Rate format: 1 system base currency (USD) = X target currency
-            if (currency === userCurrency) {
-                // Same currency: rate = 1
-                rate = 1;
-            } else if (currency === systemBaseCurrency) {
-                // Fund currency is system base (USD), user currency is not
-                // 1 USD = X userCurrency, so rate = X
-                rate = rates[userCurrency] || 1;
-            } else if (userCurrency === systemBaseCurrency) {
-                // User currency is system base (USD), fund currency is not
-                // 1 USD = X fundCurrency, so 1 fundCurrency = 1/X USD
-                // Rate = 1 / X
-                const fundRate = rates[currency];
-                if (!fundRate) {
-                    return res.status(400).json({ 
-                        error: `Exchange rate not found for currency: ${currency}` 
-                    });
-                }
-                rate = 1 / fundRate;
-            } else {
-                // Both currencies are different from system base
-                // Convert through system base: 1 fundCurrency = (1 / fundRate) * userRate
-                // Rate = userRate / fundRate
-                const fundRate = rates[currency];
-                const userRate = rates[userCurrency];
-                
-                if (!fundRate) {
-                    return res.status(400).json({ 
-                        error: `Exchange rate not found for currency: ${currency}` 
-                    });
-                }
-                if (!userRate) {
-                    return res.status(400).json({ 
-                        error: `Exchange rate not found for user currency: ${userCurrency}` 
-                    });
-                }
-                
-                rate = userRate / fundRate;
             }
 
             // Update fund balance

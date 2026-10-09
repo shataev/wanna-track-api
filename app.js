@@ -7,6 +7,7 @@ const categoryRoute = require('./routes/category');
 const fundsRoute = require('./routes/fund');
 const exchangeRatesRoute = require('./routes/exchange-rates');
 const meRoute = require('./routes/me');
+const analyticsRoute = require('./routes/analytics');
 const cors = require('cors');
 const cookieParser = require("cookie-parser");
 
@@ -34,7 +35,7 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', authRoute);
 app.use('/api/telegram', telegramRoute);
-app.use('/api', [costRoute, categoryRoute, fundsRoute, meRoute]);
+app.use('/api', [costRoute, categoryRoute, fundsRoute, meRoute, analyticsRoute]);
 app.use('/api/verify', verifyRoute);
 app.use('/api/exchange-rates', exchangeRatesRoute);
 

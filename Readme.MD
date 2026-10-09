@@ -85,6 +85,21 @@ not rejected.
 - `GET /api/funds/total` - Total of all funds in the caller's default currency
 - `POST /api/funds/transfer` - Transfer money between funds
 
+### Analytics
+Web only. Every amount is in the caller's default currency, converted exactly as
+`GET /api/costs` converts it (`amount × rate` rounded per cost; a cost without
+currency/rate counts at rate 1).
+
+- `GET /api/analytics/summary?dateFrom&dateTo` - The period `[dateFrom, dateTo)`:
+  `total`, `count`, `avgPerDay`, `projection` (to the period's end at the pace so
+  far, only while today is inside it, else `null`), `previous` (the same number of
+  days right before `dateFrom`), `categories` with `share` (0–1) and `previousTotal`,
+  `funds` (no fund: `id: null`, `"No account"`), `tags` (untagged left out) and the
+  10 largest expenses in `top`. Both dates are required; a period over 400 days is a 400
+- `GET /api/analytics/monthly?months=12` - Totals per calendar month, with
+  categories, for the last `months` (1–24) months including the current one, oldest
+  first; a month without expenses has total 0. Months are counted in Asia/Bangkok
+
 ### Telegram
 - `GET /api/telegram/telegram-binding-link` - Link that binds the caller's Telegram account
 - `POST /api/telegram/telegram-unbind` - Unbind the caller's Telegram account

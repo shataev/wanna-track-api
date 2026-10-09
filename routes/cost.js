@@ -11,6 +11,7 @@ const { getConversionRate, roundToCurrencyPrecision } = require('../utils/curren
 const { findOwnedFund } = require('../utils/fund.utils');
 const { parseObjectId } = require('../utils/id.utils');
 const { normalizeTag, normalizeTags } = require('../utils/tag.utils');
+const { userCurrencyStages } = require('../utils/cost.utils');
 
 // A positive finite amount from a number or a numeric string (the web form sends strings), otherwise null
 const parseAmount = (value) => {
@@ -135,30 +136,7 @@ router.get('/costs', authenticate, async (req, res) => {
                     preserveNullAndEmptyArrays: true
                 }
             },
-            {
-                // Handle old records without currency/rate: treat as user's base currency
-                $addFields: {
-                    currency: {
-                        $ifNull: ['$currency', userCurrency]
-                    },
-                    rate: {
-                        $ifNull: ['$rate', 1]
-                    }
-                }
-            },
-            {
-                // Calculate amount in user's base currency: amount * rate
-                $addFields: {
-                    amountInUserCurrency: {
-                        $round: [
-                            {
-                                $multiply: ['$amount', '$rate'] 
-                            },
-                            0
-                        ]
-                    }
-                }
-            },
+            ...userCurrencyStages(userCurrency),
             {
                 $group: {
                     _id: '$category._id',
@@ -397,14 +375,7 @@ router.get('/tags', authenticateUserOrBot, async (req, res) => {
             {
                 $unwind: '$tags'
             },
-            {
-                // The same conversion as GET /costs
-                $addFields: {
-                    amountInUserCurrency: {
-                        $round: [{ $multiply: ['$amount', { $ifNull: ['$rate', 1] }] }, 0]
-                    }
-                }
-            },
+            ...userCurrencyStages(userCurrency),
             {
                 $group: {
                     _id: '$tags',

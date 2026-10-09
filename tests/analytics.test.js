@@ -52,6 +52,11 @@ const FROM = '2026-10-01T00:00:00.000Z';
 const TO = '2026-10-11T00:00:00.000Z';
 
 describe('GET /api/analytics/summary', () => {
+    // A finished period unless a test says otherwise: the real clock is inside FROM..TO in October 2026
+    beforeEach(() => {
+        freezeNow('2026-12-01T00:00:00Z');
+    });
+
     it('counts only the caller\'s costs, whatever userId is sent', async () => {
         await seedCost(a, { amount: 100 });
         await seedCost(b, { amount: 7000, category: b.taxi._id, tags: ['japan'], fund: b.card._id });
@@ -92,7 +97,8 @@ describe('GET /api/analytics/summary', () => {
             dateFrom: '2026-09-21T00:00:00.000Z',
             dateTo: FROM,
             total: 30,
-            count: 2
+            count: 2,
+            fullTotal: 30
         });
     });
 
@@ -124,7 +130,7 @@ describe('GET /api/analytics/summary', () => {
 
             expect(res.status).toBe(200);
             expect(res.body.total).toBe(100);
-            expect(res.body.previous).toEqual({ dateFrom: previousFrom, dateTo: from, total: 30, count: 2 });
+            expect(res.body.previous).toEqual({ dateFrom: previousFrom, dateTo: from, total: 30, count: 2, fullTotal: 30 });
         });
     });
 
@@ -174,6 +180,113 @@ describe('GET /api/analytics/summary', () => {
         expect(res.body.projection).toBeNull();
     });
 
+    describe('a period still under way', () => {
+        // October 2026 in Bangkok, as the web sends it, and September before it
+        const OCT_FROM = '2026-09-30T17:00:00.000Z';
+        const OCT_TO = '2026-10-31T16:59:59.999Z';
+        const SEP_FROM = '2026-08-31T17:00:00.000Z';
+
+        it('averages over the days started and compares with the same span of the previous month', async () => {
+            // Oct 9, 12:00 in Bangkok: 8.5 days elapsed
+            freezeNow('2026-10-09T05:00:00Z');
+            await seedCost(a, { amount: 400, category: a.food._id, date: new Date('2026-10-02T10:00:00Z') });
+            await seedCost(a, { amount: 500, category: a.taxi._id, date: new Date('2026-10-08T10:00:00Z') });
+            await seedCost(a, { amount: 100, category: a.food._id, date: new Date('2026-09-03T10:00:00Z') });
+            await seedCost(a, { amount: 50, category: a.taxi._id, date: new Date('2026-09-09T04:59:59.999Z') });
+            await seedCost(a, { amount: 1000, category: a.food._id, date: new Date('2026-09-09T05:00:00Z') });
+            await seedCost(a, { amount: 2000, category: a.taxi._id, date: new Date('2026-09-20T10:00:00Z') });
+
+            const res = await summary(a, OCT_FROM, OCT_TO);
+
+            expect(res.status).toBe(200);
+            expect(res.body.period.days).toBe(31);
+            expect(res.body.total).toBe(900);
+            expect(res.body.avgPerDay).toBe(100);
+            expect(res.body.projection).toBe(3100);
+            expect(res.body.previous).toEqual({
+                dateFrom: SEP_FROM,
+                dateTo: '2026-09-09T05:00:00.000Z',
+                total: 150,
+                count: 2,
+                fullTotal: 3150
+            });
+            expect(res.body.categories.map(({ name, total, previousTotal }) => ({ name, total, previousTotal }))).toEqual([
+                { name: 'Taxi', total: 500, previousTotal: 50 },
+                { name: 'Food', total: 400, previousTotal: 100 }
+            ]);
+        });
+
+        it('on the first day averages over one day and compares with the same hours of the previous month', async () => {
+            // Oct 1, 03:00 in Bangkok
+            freezeNow('2026-09-30T20:00:00Z');
+            await seedCost(a, { amount: 60, date: new Date('2026-09-30T18:00:00Z') });
+            await seedCost(a, { amount: 10, date: new Date('2026-08-31T19:00:00Z') });
+            await seedCost(a, { amount: 20, date: new Date('2026-08-31T21:00:00Z') });
+
+            const res = await summary(a, OCT_FROM, OCT_TO);
+
+            expect(res.body.avgPerDay).toBe(60);
+            expect(res.body.previous).toEqual({
+                dateFrom: SEP_FROM,
+                dateTo: '2026-08-31T20:00:00.000Z',
+                total: 10,
+                count: 1,
+                fullTotal: 30
+            });
+        });
+
+        it('caps the compared span at the end of a shorter previous month', async () => {
+            // Mar 31, 12:00 in Bangkok: 30.5 days elapsed, February has 28
+            freezeNow('2026-03-31T05:00:00Z');
+            await seedCost(a, { amount: 310, date: new Date('2026-03-10T10:00:00Z') });
+            await seedCost(a, { amount: 70, date: new Date('2026-02-27T10:00:00Z') });
+
+            const res = await summary(a, '2026-02-28T17:00:00.000Z', '2026-03-31T16:59:59.999Z');
+
+            expect(res.body.avgPerDay).toBe(10);
+            expect(res.body.previous).toEqual({
+                dateFrom: '2026-01-31T17:00:00.000Z',
+                dateTo: '2026-02-28T17:00:00.000Z',
+                total: 70,
+                count: 1,
+                fullTotal: 70
+            });
+        });
+
+        it('compares a custom range with the same elapsed span of the days before it', async () => {
+            // 3 days into the 10-day period Oct 1-11; the previous one is Sep 21-Oct 1
+            freezeNow('2026-10-04T00:00:00Z');
+            await seedCost(a, { amount: 90, date: new Date('2026-10-02T10:00:00Z') });
+            await seedCost(a, { amount: 15, date: new Date('2026-09-23T23:59:59.999Z') });
+            await seedCost(a, { amount: 40, date: new Date('2026-09-24T00:00:00.000Z') });
+
+            const res = await summary(a, FROM, TO);
+
+            expect(res.body.avgPerDay).toBe(30);
+            expect(res.body.previous).toEqual({
+                dateFrom: '2026-09-21T00:00:00.000Z',
+                dateTo: '2026-09-24T00:00:00.000Z',
+                total: 15,
+                count: 1,
+                fullTotal: 55
+            });
+        });
+
+        it('treats a finished month as a whole, averaged over all its days', async () => {
+            freezeNow('2026-11-09T05:00:00Z');
+            await seedCost(a, { amount: 620, date: new Date('2026-10-02T10:00:00Z') });
+            await seedCost(a, { amount: 100, date: new Date('2026-09-03T10:00:00Z') });
+            await seedCost(a, { amount: 200, date: new Date('2026-09-20T10:00:00Z') });
+
+            const res = await summary(a, OCT_FROM, OCT_TO);
+
+            expect(res.body.avgPerDay).toBe(20);
+            expect(res.body.projection).toBeNull();
+            expect(res.body.previous).toEqual({ dateFrom: SEP_FROM, dateTo: OCT_FROM, total: 300, count: 2, fullTotal: 300 });
+            expect(res.body.categories[0].previousTotal).toBe(300);
+        });
+    });
+
     it('answers an empty period with zeros and empty lists', async () => {
         freezeNow('2026-10-05T12:00:00Z');
 
@@ -187,7 +300,8 @@ describe('GET /api/analytics/summary', () => {
             count: 0,
             avgPerDay: 0,
             projection: 0,
-            previous: { dateFrom: '2026-09-21T00:00:00.000Z', dateTo: FROM, total: 0, count: 0 },
+            // 4.5 days into the period: the first 4.5 days of the previous one
+            previous: { dateFrom: '2026-09-21T00:00:00.000Z', dateTo: '2026-09-25T12:00:00.000Z', total: 0, count: 0, fullTotal: 0 },
             categories: [],
             funds: [],
             tags: [],

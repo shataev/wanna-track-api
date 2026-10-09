@@ -98,6 +98,12 @@ currency/rate counts at rate 1).
   right before `dateFrom`), `categories` with `share` (0–1) and `previousTotal`,
   `funds` (no fund: `id: null`, `"No account"`), `tags` (untagged left out) and the
   10 largest expenses in `top`. Both dates are required; a period over 400 days is a 400
+  While today is inside the period, `avgPerDay` divides by the days started so far
+  (at least 1) instead of all its days, and `previous` covers only the same elapsed
+  span from its start, capped at its end: `previous.dateFrom`/`dateTo` describe that
+  span, and `previous.total`, `previous.count` and every `previousTotal` count only
+  it. `previous.fullTotal` is always the whole previous period. A finished period is
+  compared with the whole previous one.
 - `GET /api/analytics/monthly?months=12` - Totals per calendar month, with
   categories, for the last `months` (1–24) months including the current one, oldest
   first; a month without expenses has total 0. Months are counted in Asia/Bangkok

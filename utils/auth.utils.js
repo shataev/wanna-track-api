@@ -12,7 +12,8 @@ module.exports = {
             { ...user },
             process.env.SECRET_KEY,
             {
-                expiresIn: ACCESS_TOKEN_EXPIRATION_TIME_SECONDS
+                // ACCESS_TOKEN_TTL_SECONDS shortens the lifetime for tests and local expiry checks
+                expiresIn: Number(process.env.ACCESS_TOKEN_TTL_SECONDS) || ACCESS_TOKEN_EXPIRATION_TIME_SECONDS
             }
         )
     },

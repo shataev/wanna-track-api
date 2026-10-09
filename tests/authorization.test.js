@@ -75,7 +75,9 @@ const ROUTES = [
     },
     { name: 'GET /api/tags', method: 'get', path: () => '/api/tags', bot: true },
     { name: 'GET /api/me', method: 'get', path: () => '/api/me', bot: true },
-    { name: 'PUT /api/me/active-tag', method: 'put', path: () => '/api/me/active-tag', body: () => ({ tag: 'japan' }), bot: true }
+    { name: 'PUT /api/me/active-tag', method: 'put', path: () => '/api/me/active-tag', body: () => ({ tag: 'japan' }), bot: true },
+    { name: 'GET /api/analytics/summary', method: 'get', path: () => '/api/analytics/summary?dateFrom=2026-10-01&dateTo=2026-11-01', bot: false },
+    { name: 'GET /api/analytics/monthly', method: 'get', path: () => '/api/analytics/monthly', bot: false }
 ];
 
 const prepare = async (route) => {

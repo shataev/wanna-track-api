@@ -7,9 +7,10 @@ const FundTransaction = require('../models/FundTransaction');
 const Category = require('../models/Category');
 const { authenticate, authenticateUserOrBot } = require('../middlewares/authenticate');
 const { getRatesObject } = require('../services/exchangeRateService');
-const { getConversionRate } = require('../utils/currency.utils');
+const { getConversionRate, roundToCurrencyPrecision } = require('../utils/currency.utils');
 const { findOwnedFund } = require('../utils/fund.utils');
 const { parseObjectId } = require('../utils/id.utils');
+const { normalizeTag, normalizeTags } = require('../utils/tag.utils');
 
 // A positive finite amount from a number or a numeric string (the web form sends strings), otherwise null
 const parseAmount = (value) => {
@@ -22,31 +23,92 @@ const parseAmount = (value) => {
     return Number.isFinite(amount) && amount > 0 ? amount : null;
 };
 
+// The requested currency: null when absent, an upper-case code, or undefined when it cannot be one
+const parseCurrency = (value) => {
+    if (value === undefined || value === null || value === '') {
+        return null;
+    }
+
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+
+    const code = value.trim().toUpperCase();
+
+    return /^[A-Z]{3}$/.test(code) ? code : undefined;
+};
+
+/**
+ * getRate(from, to) resolves to { rate } or to { status, error } for the response.
+ * The stored rates are read once, and only when two currencies actually differ.
+ */
+const createRateGetter = () => {
+    let exchangeRates;
+
+    return async (from, to) => {
+        if (from === to) {
+            return { rate: 1 };
+        }
+
+        if (exchangeRates === undefined) {
+            exchangeRates = await getRatesObject();
+        }
+
+        if (!exchangeRates) {
+            return { status: 404, error: 'Exchange rates not found. Please update rates first.' };
+        }
+
+        const { rates, base } = exchangeRates;
+        const rate = getConversionRate(from, to, rates, base);
+
+        if (!rate) {
+            const missing = from !== base && !rates[from] ? from : to;
+
+            return { status: 400, error: `Exchange rate not found for currency: ${missing}` };
+        }
+
+        return { rate };
+    };
+};
+
 // Get all user's costs
 router.get('/costs', authenticate, async (req, res) => {
     try {
         const userId = req.user.id;
-        const {dateFrom, dateTo} = req.query;
+        const {dateFrom, dateTo, tag: rawTag} = req.query;
 
         // Get user's base currency
         const userCurrency = req.user.defaultCurrency || 'USD';
 
+        const match = { user: userId };
+
+        if (rawTag !== undefined) {
+            const tag = normalizeTag(rawTag);
+
+            // No cost can carry a tag that normalises to nothing
+            if (!tag) {
+                return res.status(200).json([]);
+            }
+
+            match.tags = tag;
+        }
+
+        // Without a tag the period is required, as before; with one, each bound is optional (all time)
+        if (rawTag === undefined || dateFrom !== undefined || dateTo !== undefined) {
+            match.date = {};
+
+            if (rawTag === undefined || dateFrom !== undefined) {
+                match.date.$gte = new Date(dateFrom);
+            }
+
+            if (rawTag === undefined || dateTo !== undefined) {
+                match.date.$lt = new Date(dateTo);
+            }
+        }
+
         const costs = await Cost.aggregate([
             {
-                $match: {
-                    $and: [
-                        {
-                            user: userId,
-                        },
-                        {
-                            date: {
-                                $gte: new Date(dateFrom),
-                                $lt: new Date(dateTo)
-                            }
-                        }
-                    ]
-
-                },
+                $match: match,
             },
             {
                 $lookup: {
@@ -117,7 +179,16 @@ router.get('/costs', authenticate, async (req, res) => {
                             createdAt: '$createdAt',
                             updatedAt: '$updatedAt',
                             fund: '$fund',
-                            category: '$category'
+                            category: '$category',
+                            tags: { $ifNull: ['$tags', []] },
+                            // In the fund's currency; costs older than fundAmount were debited `amount`
+                            fundAmount: {
+                                $cond: [
+                                    { $ifNull: ['$fund', false] },
+                                    { $ifNull: ['$fundAmount', '$amount'] },
+                                    null
+                                ]
+                            }
                         }
                     },
                 }
@@ -152,13 +223,17 @@ router.get('/costs', authenticate, async (req, res) => {
 
 
 // Add new cost
+// `amount` and `currency` are what was spent; with a fund in another currency the fund is debited
+// the converted `fundAmount`. `rate` (currency -> user's default currency) is always computed here.
 router.post('/cost', authenticateUserOrBot, async (req, res) => {
     const {
         amount: rawAmount,
         category,
         comment,
         date,
-        fundId
+        fundId,
+        tags: rawTags,
+        currency: rawCurrency
     } = req.body;
     const userId = req.user.id;
 
@@ -167,6 +242,21 @@ router.post('/cost', authenticateUserOrBot, async (req, res) => {
 
         if (amount === null) {
             return res.status(400).json({ error: 'Amount must be a positive number' });
+        }
+
+        // Absent: the user's active tag; present, even empty: exactly the tags given
+        if (rawTags !== undefined && !Array.isArray(rawTags)) {
+            return res.status(400).json({ error: 'Tags must be an array' });
+        }
+
+        const tags = rawTags === undefined
+            ? normalizeTags(req.user.activeTag ? [req.user.activeTag] : [])
+            : normalizeTags(rawTags);
+
+        const requestedCurrency = parseCurrency(rawCurrency);
+
+        if (requestedCurrency === undefined) {
+            return res.status(400).json({ error: 'Currency must be a three-letter code' });
         }
 
         // Either a global category (user: null) or one of the caller's own; checked before any money moves
@@ -180,81 +270,77 @@ router.post('/cost', authenticateUserOrBot, async (req, res) => {
             return res.status(404).json({ error: 'Category not found' });
         }
 
-        let currency = null;
-        let rate = null;
+        const userCurrency = req.user.defaultCurrency || 'USD';
+        const getRate = createRateGetter();
 
-        // If fund is provided, get currency from fund and calculate rate
+        let fund = null;
+        let fundAmount;
+
         if (fundId) {
-            const fund = await findOwnedFund(fundId, userId);
-            
+            fund = await findOwnedFund(fundId, userId);
+
             if (!fund) {
                 return res.status(404).json({ error: 'Fund not found' });
             }
+        }
 
-            if (fund.currentBalance < amount) {
+        // Without a currency: the fund's, else the user's default, as before
+        const currency = requestedCurrency || (fund ? fund.currency : userCurrency);
+
+        const toUser = await getRate(currency, userCurrency);
+
+        if (toUser.error) {
+            return res.status(toUser.status).json({ error: toUser.error });
+        }
+
+        if (fund) {
+            const toFund = await getRate(currency, fund.currency);
+
+            if (toFund.error) {
+                return res.status(toFund.status).json({ error: toFund.error });
+            }
+
+            fundAmount = currency === fund.currency
+                ? amount
+                : roundToCurrencyPrecision(amount * toFund.rate, fund.currency);
+
+            if (fundAmount <= 0) {
+                return res.status(400).json({ error: `Amount is too small to debit in ${fund.currency}` });
+            }
+
+            if (fund.currentBalance < fundAmount) {
                 return res.status(400).json({ error: 'Insufficient funds' });
             }
 
-            // Get currency from fund
-            currency = fund.currency;
-
-            // Get user's base currency
-            const userCurrency = req.user.defaultCurrency || 'USD';
-
-            // Get exchange rates
-            const exchangeRates = await getRatesObject();
-            if (!exchangeRates) {
-                return res.status(404).json({
-                    error: 'Exchange rates not found. Please update rates first.'
-                });
-            }
-
-            const { rates, base: systemBaseCurrency } = exchangeRates;
-
-            // Сколько единиц базовой валюты пользователя стоит одна единица
-            // валюты фонда: сумма расхода потом умножается на этот курс
-            rate = getConversionRate(currency, userCurrency, rates, systemBaseCurrency);
-
-            if (!rate) {
-                const missingCurrency = currency !== systemBaseCurrency && !rates[currency]
-                    ? currency
-                    : userCurrency;
-
-                return res.status(400).json({
-                    error: `Exchange rate not found for currency: ${missingCurrency}`
-                });
-            }
-
             // Update fund balance
-            fund.currentBalance -= amount;
+            fund.currentBalance -= fundAmount;
             await fund.save();
+
+            const description = comment || 'Cost payment';
 
             // Create fund transaction record
             const fundTransaction = new FundTransaction({
                 userId: new ObjectId(userId),
-                fundId: new ObjectId(fund),
+                fundId: fund._id,
                 type: 'expense',
-                amount: -amount,
-                description: comment || 'Cost payment'
+                amount: -fundAmount,
+                description: currency === fund.currency ? description : `${description} (${amount} ${currency})`
             });
             await fundTransaction.save();
-        } else {
-            // If no fund is provided, we need currency and rate from request
-            // or use user's default currency with rate = 1
-            currency = req.body.currency || req.user.defaultCurrency || 'USD';
-            rate = req.body.rate || 1;
         }
 
         // Create new cost
         const newCost = new Cost({
             amount,
             currency,
-            rate,
+            rate: toUser.rate,
             category: categoryId,
             comment,
             date,
             user: userId,
-            fund: fundId ? new ObjectId(fundId) : null
+            fund: fund ? fund._id : null,
+            tags,
+            fundAmount
         });
 
         const cost = await newCost.save();
@@ -262,6 +348,89 @@ router.post('/cost', authenticateUserOrBot, async (req, res) => {
         res
             .status(201)
             .json(cost);
+    } catch (error) {
+        console.log(error)
+        res
+            .status(500)
+            .json(error);
+    }
+})
+
+// Replace the tags of one of the caller's costs; nothing else about a cost is editable here
+router.patch('/cost/:id', authenticate, async (req, res) => {
+    try {
+        const { tags } = req.body ?? {};
+
+        if (!Array.isArray(tags)) {
+            return res.status(400).json({ error: 'Tags must be an array' });
+        }
+
+        const costId = parseObjectId(req.params.id);
+        const cost = costId && await Cost.findOneAndUpdate(
+            { _id: costId, user: req.user.id },
+            { tags: normalizeTags(tags) },
+            { new: true }
+        );
+
+        if (!cost) {
+            return res.status(404).json({ error: 'Cost not found' });
+        }
+
+        res.status(200).json(cost);
+    } catch (error) {
+        console.log(error)
+        res
+            .status(500)
+            .json(error);
+    }
+})
+
+// The caller's tags with their totals in the user's default currency, most recently used first
+router.get('/tags', authenticateUserOrBot, async (req, res) => {
+    try {
+        const userCurrency = req.user.defaultCurrency || 'USD';
+
+        const tags = await Cost.aggregate([
+            {
+                $match: { user: req.user.id, 'tags.0': { $exists: true } }
+            },
+            {
+                $unwind: '$tags'
+            },
+            {
+                // The same conversion as GET /costs
+                $addFields: {
+                    amountInUserCurrency: {
+                        $round: [{ $multiply: ['$amount', { $ifNull: ['$rate', 1] }] }, 0]
+                    }
+                }
+            },
+            {
+                $group: {
+                    _id: '$tags',
+                    count: { $sum: 1 },
+                    total: { $sum: '$amountInUserCurrency' },
+                    firstDate: { $min: '$date' },
+                    lastDate: { $max: '$date' }
+                }
+            },
+            {
+                $sort: { lastDate: -1, _id: 1 }
+            },
+            {
+                $project: {
+                    _id: 0,
+                    tag: '$_id',
+                    count: 1,
+                    total: { $round: ['$total', 0] },
+                    currency: { $literal: userCurrency },
+                    firstDate: 1,
+                    lastDate: 1
+                }
+            }
+        ]);
+
+        res.status(200).json(tags);
     } catch (error) {
         console.log(error)
         res

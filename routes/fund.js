@@ -1,34 +1,23 @@
 const router = require('express').Router();
 const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
-const User = require('../models/User');
-const {checkAccessToken} = require('../middlewares/checkAuth');
+const { authenticate, authenticateUserOrBot } = require('../middlewares/authenticate');
 const { getRatesObject } = require('../services/exchangeRateService');
-const { calculateTotalFundsAmount } = require('../utils/fund.utils');
+const { calculateTotalFundsAmount, findOwnedFund } = require('../utils/fund.utils');
 const { getConversionRate, roundToCurrencyPrecision } = require('../utils/currency.utils');
-const mongoose = require("mongoose");
-const ObjectId = mongoose.Types.ObjectId;
+const { parseObjectId } = require('../utils/id.utils');
 
 // Get all user's funds
-router.get('/funds', async (req, res) => {
+router.get('/funds', authenticateUserOrBot, async (req, res) => {
     try {
-        const userId = new ObjectId(req.query.userId);
+        const userId = req.user.id;
 
         let funds = await Fund.find({
             userId: userId,
         })
 
-        // Get user's base currency from database
-        let userCurrency = 'USD';
-        if (req.user && req.user.defaultCurrency) {
-            userCurrency = req.user.defaultCurrency;
-        } else {
-            // If req.user is not available, get currency from database
-            const user = await User.findById(userId);
-            if (user && user.defaultCurrency) {
-                userCurrency = user.defaultCurrency;
-            }
-        }
+        // Get user's base currency
+        const userCurrency = req.user.defaultCurrency || 'USD';
 
         // Calculate total amount across all funds
         const totalFunds = await calculateTotalFundsAmount(userId, userCurrency);
@@ -54,11 +43,10 @@ router.get('/funds', async (req, res) => {
 
 
 // Add new fund
-router.post('/funds', async (req, res) => {
+router.post('/funds', authenticate, async (req, res) => {
     const {
         name,
         icon,
-        userId,
         description,
         initialBalance,
         isDefault,
@@ -74,7 +62,7 @@ router.post('/funds', async (req, res) => {
             currentBalance: initialBalance,
             isDefault,
             currency,
-            userId: userId ? new ObjectId(userId) : null
+            userId: req.user.id
         });
 
         const fund = await newFund.save();
@@ -91,15 +79,19 @@ router.post('/funds', async (req, res) => {
 })
 
 // Update fund
-router.put('/funds/:id', async (req, res) => {
+router.put('/funds/:id', authenticate, async (req, res) => {
     const {id} = req.params;
     const {name, description, currentBalance, icon, isDefault, currency} = req.body;
 
     try {
-        const oldFund = await Fund.findById(id);
+        const oldFund = await findOwnedFund(id, req.user.id);
 
-        const fund = await Fund.findByIdAndUpdate(
-            id,
+        if (!oldFund) {
+            return res.status(404).json({error: 'Fund is not found'});
+        }
+
+        const fund = await Fund.findOneAndUpdate(
+            {_id: oldFund._id, userId: req.user.id},
             {name, description, currentBalance, icon, isDefault, currency},
             {new: true}
         );
@@ -125,17 +117,17 @@ router.put('/funds/:id', async (req, res) => {
 });
 
 // Delete fund
-router.delete('/funds/:id', async (req, res) => {
-    const { id } = req.params;
+router.delete('/funds/:id', authenticate, async (req, res) => {
+    const fundId = parseObjectId(req.params.id);
 
     try {
-        const fund = await Fund.findByIdAndDelete(id);
+        const fund = fundId && await Fund.findOneAndDelete({ _id: fundId, userId: req.user.id });
 
         if (!fund) {
             return res.status(404).json({ error: 'Fund not found' });
         }
 
-        await FundTransaction.deleteMany({ fundId: id });
+        await FundTransaction.deleteMany({ fundId: fund._id });
 
         res.status(200).json({ message: 'Fund deleted successfully' });
     } catch (error) {
@@ -146,7 +138,7 @@ router.delete('/funds/:id', async (req, res) => {
 // Transfer funds between two funds
 router.post('/funds/transfer', 
     [
-        checkAccessToken,
+        authenticate,
         async (req, res) => {
             const {fromFundId, toFundId, amount, description} = req.body;
             const userId = req.user.id;
@@ -162,18 +154,22 @@ router.post('/funds/transfer',
                     return res.status(400).json({error: 'Amount must be a positive number'});
                 }
 
+                // A malformed id is treated like someone else's fund instead of failing the cast with a 500
+                const fromId = parseObjectId(fromFundId);
+                const toId = parseObjectId(toFundId);
+
                 // Find both funds and check ownership in a single query
-                const funds = await Fund.find({
-                    _id: { $in: [fromFundId, toFundId] },
+                const funds = fromId && toId ? await Fund.find({
+                    _id: { $in: [fromId, toId] },
                     userId
-                });
+                }) : [];
 
                 if (funds.length !== 2) {
                     return res.status(404).json({error: 'One or both funds not found or you don\'t have access to them'});
                 }
 
-                const fromFund = funds.find(fund => fund._id.toString() === fromFundId);
-                const toFund = funds.find(fund => fund._id.toString() === toFundId);
+                const fromFund = funds.find(fund => fund._id.equals(fromId));
+                const toFund = funds.find(fund => fund._id.equals(toId));
 
                 if (fromFund.currentBalance < withdrawnAmount) {
                     return res.status(400).json({error: 'Insufficient amount of money in source fund'});
@@ -237,8 +233,8 @@ router.post('/funds/transfer',
                 await incomingTransaction.save();
 
                 // Update funds
-                await Fund.findByIdAndUpdate(fromFundId, {$inc: {currentBalance: -withdrawnAmount}});
-                await Fund.findByIdAndUpdate(toFundId, {$inc: {currentBalance: creditedAmount}});
+                await Fund.findOneAndUpdate({_id: fromFundId, userId}, {$inc: {currentBalance: -withdrawnAmount}});
+                await Fund.findOneAndUpdate({_id: toFundId, userId}, {$inc: {currentBalance: creditedAmount}});
 
                 res.status(200).json({
                     message: 'Transferred successfully!',
@@ -256,10 +252,10 @@ router.post('/funds/transfer',
 // GET /api/funds/total — return total amount across all funds in user's base currency
 router.get('/funds/total', 
     [
-        checkAccessToken,
+        authenticate,
         async (req, res) => {
             try {
-                const userId = new ObjectId(req.user.id);
+                const userId = req.user.id;
                 const userCurrency = req.user.defaultCurrency || 'USD';
 
                 const totalFunds = await calculateTotalFundsAmount(userId, userCurrency);
@@ -282,11 +278,11 @@ router.get('/funds/total',
     ]);
 
 // GET /api/funds/:id
-router.get('/funds/:id', async (req, res) => {
+router.get('/funds/:id', authenticate, async (req, res) => {
     const {id} = req.params;
 
     try {
-        const fund = await Fund.findById(id);
+        const fund = await findOwnedFund(id, req.user.id);
         if (!fund) {
             return res.status(404).json({error: 'Fund is not found'});
         }
@@ -310,11 +306,17 @@ router.get('/funds/:id', async (req, res) => {
 });
 
 // Get all transactions for a fund
-router.get('/funds/:id/transactions', async (req, res) => {
+router.get('/funds/:id/transactions', authenticate, async (req, res) => {
     const {id} = req.params;
 
     try {
-        const transactions = await FundTransaction.find({fundId: id});
+        const fund = await findOwnedFund(id, req.user.id);
+
+        if (!fund) {
+            return res.status(404).json({error: 'Fund is not found'});
+        }
+
+        const transactions = await FundTransaction.find({fundId: fund._id});
         res.status(200).json(transactions);
     } catch (error) {
         res.status(500).json({error: error.message});

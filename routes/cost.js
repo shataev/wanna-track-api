@@ -4,22 +4,32 @@ const mongoose = require("mongoose");
 const ObjectId = mongoose.Types.ObjectId;
 const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
-const User = require('../models/User');
+const Category = require('../models/Category');
+const { authenticate, authenticateUserOrBot } = require('../middlewares/authenticate');
 const { getRatesObject } = require('../services/exchangeRateService');
 const { getConversionRate } = require('../utils/currency.utils');
+const { findOwnedFund } = require('../utils/fund.utils');
+const { parseObjectId } = require('../utils/id.utils');
+
+// A positive finite amount from a number or a numeric string (the web form sends strings), otherwise null
+const parseAmount = (value) => {
+    if (typeof value !== 'number' && (typeof value !== 'string' || value.trim() === '')) {
+        return null;
+    }
+
+    const amount = Number(value);
+
+    return Number.isFinite(amount) && amount > 0 ? amount : null;
+};
 
 // Get all user's costs
-router.get('/costs', async (req, res) => {
+router.get('/costs', authenticate, async (req, res) => {
     try {
-        const userId = new ObjectId(req.query.userId);
+        const userId = req.user.id;
         const {dateFrom, dateTo} = req.query;
 
         // Get user's base currency
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        const userCurrency = user.defaultCurrency || 'USD';
+        const userCurrency = req.user.defaultCurrency || 'USD';
 
         const costs = await Cost.aggregate([
             {
@@ -142,23 +152,40 @@ router.get('/costs', async (req, res) => {
 
 
 // Add new cost
-router.post('/cost', async (req, res) => {
+router.post('/cost', authenticateUserOrBot, async (req, res) => {
     const {
-        amount,
+        amount: rawAmount,
         category,
         comment,
-        userId,
         date,
         fundId
     } = req.body;
+    const userId = req.user.id;
 
     try {
+        const amount = parseAmount(rawAmount);
+
+        if (amount === null) {
+            return res.status(400).json({ error: 'Amount must be a positive number' });
+        }
+
+        // Either a global category (user: null) or one of the caller's own; checked before any money moves
+        const categoryId = parseObjectId(category);
+        const isCategoryAllowed = categoryId && await Category.exists({
+            _id: categoryId,
+            user: { $in: [null, userId] }
+        });
+
+        if (!isCategoryAllowed) {
+            return res.status(404).json({ error: 'Category not found' });
+        }
+
         let currency = null;
         let rate = null;
 
         // If fund is provided, get currency from fund and calculate rate
         if (fundId) {
-            const fund = await Fund.findById(fundId);
+            const fund = await findOwnedFund(fundId, userId);
             
             if (!fund) {
                 return res.status(404).json({ error: 'Fund not found' });
@@ -172,11 +199,7 @@ router.post('/cost', async (req, res) => {
             currency = fund.currency;
 
             // Get user's base currency
-            const user = await User.findById(userId);
-            if (!user) {
-                return res.status(404).json({ error: 'User not found' });
-            }
-            const userCurrency = user.defaultCurrency || 'USD';
+            const userCurrency = req.user.defaultCurrency || 'USD';
 
             // Get exchange rates
             const exchangeRates = await getRatesObject();
@@ -218,11 +241,7 @@ router.post('/cost', async (req, res) => {
         } else {
             // If no fund is provided, we need currency and rate from request
             // or use user's default currency with rate = 1
-            const user = await User.findById(userId);
-            if (!user) {
-                return res.status(404).json({ error: 'User not found' });
-            }
-            currency = req.body.currency || user.defaultCurrency || 'USD';
+            currency = req.body.currency || req.user.defaultCurrency || 'USD';
             rate = req.body.rate || 1;
         }
 
@@ -231,10 +250,10 @@ router.post('/cost', async (req, res) => {
             amount,
             currency,
             rate,
-            category: category,
+            category: categoryId,
             comment,
             date,
-            user: new ObjectId(userId),
+            user: userId,
             fund: fundId ? new ObjectId(fundId) : null
         });
 

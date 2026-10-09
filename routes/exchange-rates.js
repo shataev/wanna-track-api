@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { getRates, updateRates } = require('../services/exchangeRateService');
 const { ALL_CURRENCIES, getCurrencySymbol } = require('../utils/currency.utils');
+const { requireAdminSecret } = require('../middlewares/requireAdminSecret');
 
 // GET /api/exchange-rates/current — вернуть актуальные курсы
 router.get('/current', async (req, res) => {
@@ -67,7 +68,8 @@ router.get('/currencies', async (req, res) => {
 });
 
 // POST /api/exchange-rates/update — вручную обновить курсы
-router.post('/update', async (req, res) => {
+// Calls the paid rates API, so it takes the X-Admin-Secret header; the daily cron does not go through it
+router.post('/update', requireAdminSecret, async (req, res) => {
   try {
     const updatedRates = await updateRates();
     

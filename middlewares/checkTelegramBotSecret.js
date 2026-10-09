@@ -33,4 +33,4 @@ const checkTelegramBotSecret = (req, res, next) => {
   next();
 };
 
-module.exports = { checkTelegramBotSecret };
+module.exports = { checkTelegramBotSecret, isSecretValid };

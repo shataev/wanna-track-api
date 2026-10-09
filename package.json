@@ -6,7 +6,8 @@
   "scripts": {
     "serve": "stage=$npm_config_stage nodemon index.js",
     "serve:dev": "npm run serve --stage=development",
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "jest --runInBand"
   },
   "keywords": [],
   "author": "",
@@ -28,5 +29,24 @@
     "tesseract.js": "^6.0.0",
     "uuid": "^9.0.1"
   },
-  "packageManager": "yarn@1.22.19+sha1.4ba7fc5c6e704fce2066ecbfb0b0d8976fe62447"
+  "packageManager": "yarn@1.22.19+sha1.4ba7fc5c6e704fce2066ecbfb0b0d8976fe62447",
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "mongodb-memory-server-core": "^10.4.3",
+    "supertest": "^7.3.1"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "setupFiles": [
+      "<rootDir>/tests/env.js"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/setup.js"
+    ],
+    "globalSetup": "<rootDir>/tests/globalSetup.js",
+    "globalTeardown": "<rootDir>/tests/globalTeardown.js",
+    "testMatch": [
+      "<rootDir>/tests/**/*.test.js"
+    ]
+  }
 }

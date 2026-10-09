@@ -1,12 +1,11 @@
 const router = require('express').Router();
 const Category = require('../models/Category');
-const mongoose = require("mongoose");
-const ObjectId = mongoose.Types.ObjectId;
+const { authenticate, authenticateUserOrBot } = require('../middlewares/authenticate');
 
 // Get all user's categories
-router.get('/category', async (req, res) => {
+router.get('/category', authenticateUserOrBot, async (req, res) => {
     try {
-        const userId = new ObjectId(req.query.userId);
+        const userId = req.user.id;
 
         let categories = await Category.find({
             user:  [null, userId],
@@ -34,17 +33,17 @@ router.get('/category', async (req, res) => {
 
 
 // Add new category
-router.post('/category', async (req, res) => {
+// Always the caller's own: a category with user null is global and shows up for every user
+router.post('/category', authenticate, async (req, res) => {
     const {
         name,
         icon,
-        userId,
     } = req.body;
 
     const newCategory = new Category({
         name,
         icon,
-        user: userId ? new ObjectId(userId) : null
+        user: req.user.id
     });
 
     try {

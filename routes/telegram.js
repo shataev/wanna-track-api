@@ -1,12 +1,12 @@
 const router = require('express').Router();
 const crypto = require('crypto');
-const { checkAccessToken } = require('../middlewares/checkAuth');
+const { authenticate } = require('../middlewares/authenticate');
 const { checkTelegramBotSecret } = require('../middlewares/checkTelegramBotSecret');
 const TelegramBindingToken = require('../models/TelegramBindingToken');
 const User = require('../models/User');
 
 // Get link to bind Telegram account (user must be authenticated)
-router.get('/telegram-binding-link', checkAccessToken, async (req, res) => {
+router.get('/telegram-binding-link', authenticate, async (req, res) => {
   try {
     const botUsername = process.env.TELEGRAM_BOT_USERNAME;
 
@@ -62,6 +62,13 @@ router.post('/telegram-bind', checkTelegramBotSecret, async (req, res) => {
       });
     }
 
+    // One Telegram account names one user: the bot looks users up by telegramId, so a second
+    // holder would make that lookup pick an arbitrary account
+    await User.updateMany(
+      { telegramId: String(telegramId), _id: { $ne: binding.user._id } },
+      { $unset: { telegramId: 1 } }
+    );
+
     const user = await User.findByIdAndUpdate(
       binding.user._id,
       { telegramId: String(telegramId) },
@@ -103,7 +110,7 @@ router.get('/user-by-telegram/:telegramId', checkTelegramBotSecret, async (req, 
 });
 
 // Unbind Telegram account from the authenticated user
-router.post('/telegram-unbind', checkAccessToken, async (req, res) => {
+router.post('/telegram-unbind', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
 

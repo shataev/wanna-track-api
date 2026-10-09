@@ -3,7 +3,10 @@ const {generateAccessToken} = require("../utils/auth.utils");
 
 module.exports = {
     setAccessTokenToReq(req, res, next) {
-        req.accessToken = generateAccessToken(req.user)
+        const {username, email, id} = req.user;
+
+        // The token carries only what identifies the user; the rest is read from the database per request
+        req.accessToken = generateAccessToken({username, email, id})
 
         next();
     }

@@ -1,5 +1,20 @@
 const Fund = require('../models/Fund');
 const { getRates } = require('../services/exchangeRateService');
+const { parseObjectId } = require('./id.utils');
+
+/**
+ * The fund with this id if it belongs to the user, otherwise null (also for a malformed id),
+ * so a caller cannot tell someone else's fund from one that does not exist
+ */
+async function findOwnedFund(id, userId) {
+    const fundId = parseObjectId(id);
+
+    if (!fundId) {
+        return null;
+    }
+
+    return Fund.findOne({ _id: fundId, userId });
+}
 
 /**
  * Calculates the total amount across all user funds in the user's base currency
@@ -92,5 +107,6 @@ async function calculateTotalFundsAmount(userId, userCurrency = 'USD') {
 }
 
 module.exports = {
-    calculateTotalFundsAmount
+    calculateTotalFundsAmount,
+    findOwnedFund
 };

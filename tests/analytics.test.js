@@ -101,8 +101,44 @@ describe('GET /api/analytics/summary', () => {
 
         expect(res.status).toBe(200);
         expect(res.body.period.days).toBe(31);
-        expect(res.body.previous.dateFrom).toBe('2026-08-30T17:00:00.000Z');
-        expect(res.body.previous.dateTo).toBe('2026-09-30T17:00:00.000Z');
+    });
+
+    // Bangkok month starts: [label, dateFrom, next month start, previous month start]
+    const CALENDAR_MONTHS = [
+        ['October vs September (30 days)', '2026-09-30T17:00:00.000Z', '2026-10-31T17:00:00.000Z', '2026-08-31T17:00:00.000Z'],
+        ['March vs February', '2026-02-28T17:00:00.000Z', '2026-03-31T17:00:00.000Z', '2026-01-31T17:00:00.000Z'],
+        ['January vs December', '2025-12-31T17:00:00.000Z', '2026-01-31T17:00:00.000Z', '2025-11-30T17:00:00.000Z']
+    ];
+
+    describe.each(CALENDAR_MONTHS)('a Bangkok calendar month: %s', (label, from, nextFrom, previousFrom) => {
+        it.each([
+            ['the next month\'s start', nextFrom],
+            ['its last millisecond, as the web sends it', new Date(new Date(nextFrom).getTime() - 1).toISOString()]
+        ])('is compared with the previous calendar month when it ends at %s', async (_, to) => {
+            await seedCost(a, { amount: 1, date: new Date(new Date(previousFrom).getTime() - 1) });
+            await seedCost(a, { amount: 10, date: new Date(previousFrom) });
+            await seedCost(a, { amount: 20, date: new Date(new Date(from).getTime() - 1) });
+            await seedCost(a, { amount: 100, date: new Date(from) });
+
+            const res = await summary(a, from, to);
+
+            expect(res.status).toBe(200);
+            expect(res.body.total).toBe(100);
+            expect(res.body.previous).toEqual({ dateFrom: previousFrom, dateTo: from, total: 30, count: 2 });
+        });
+    });
+
+    it.each([
+        ['a UTC month, not a Bangkok one', '2026-10-01T00:00:00.000Z', '2026-11-01T00:00:00.000Z', '2026-08-31T00:00:00.000Z'],
+        ['a month that starts mid-month', '2026-09-15T17:00:00.000Z', '2026-10-15T17:00:00.000Z', '2026-08-16T17:00:00.000Z'],
+        ['two calendar months', '2026-08-31T17:00:00.000Z', '2026-10-31T17:00:00.000Z', '2026-07-01T17:00:00.000Z'],
+        ['a month cut short by a day', '2026-09-30T17:00:00.000Z', '2026-10-30T17:00:00.000Z', '2026-08-31T17:00:00.000Z']
+    ])('keeps the same number of days before %s', async (_, from, to, previousFrom) => {
+        const res = await summary(a, from, to);
+
+        expect(res.status).toBe(200);
+        expect(res.body.previous.dateFrom).toBe(previousFrom);
+        expect(res.body.previous.dateTo).toBe(from);
     });
 
     it('projects the total to the end of the period at the pace so far while today is inside it', async () => {

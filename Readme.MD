@@ -92,8 +92,10 @@ currency/rate counts at rate 1).
 
 - `GET /api/analytics/summary?dateFrom&dateTo` - The period `[dateFrom, dateTo)`:
   `total`, `count`, `avgPerDay`, `projection` (to the period's end at the pace so
-  far, only while today is inside it, else `null`), `previous` (the same number of
-  days right before `dateFrom`), `categories` with `share` (0–1) and `previousTotal`,
+  far, only while today is inside it, else `null`), `previous` (the previous calendar
+  month when the period is exactly one Asia/Bangkok calendar month, ending at the
+  next month's start or one millisecond before it; otherwise the same number of days
+  right before `dateFrom`), `categories` with `share` (0–1) and `previousTotal`,
   `funds` (no fund: `id: null`, `"No account"`), `tags` (untagged left out) and the
   10 largest expenses in `top`. Both dates are required; a period over 400 days is a 400
 - `GET /api/analytics/monthly?months=12` - Totals per calendar month, with

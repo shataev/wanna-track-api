@@ -79,9 +79,39 @@ const describeCategory = (cost) => ({
     icon: cost.category.icon
 });
 
+// 'YYYY-MM' of the Bangkok calendar month a moment falls in
+const bangkokMonthKey = (date) => new Date(date.getTime() + BANGKOK_OFFSET_MS).toISOString().slice(0, 7);
+
+// The instant a Bangkok calendar month starts; month may be out of 0-11, as with Date.UTC
+const bangkokMonthStart = (year, month) => new Date(Date.UTC(year, month, 1) - BANGKOK_OFFSET_MS);
+
 /**
- * The period [dateFrom, dateTo) as GET /costs reads it, compared with the same number of days
- * immediately before dateFrom. All amounts are in the user's default currency.
+ * The start of the previous Bangkok calendar month when [dateFrom, dateTo) is exactly one Bangkok
+ * calendar month, else null. The end may be the next month's start or one millisecond before it,
+ * which is what the web sends.
+ */
+const previousCalendarMonthStart = (dateFrom, dateTo) => {
+    const inBangkok = new Date(dateFrom.getTime() + BANGKOK_OFFSET_MS);
+    const year = inBangkok.getUTCFullYear();
+    const month = inBangkok.getUTCMonth();
+
+    if (bangkokMonthStart(year, month).getTime() !== dateFrom.getTime()) {
+        return null;
+    }
+
+    const nextMonthStart = bangkokMonthStart(year, month + 1).getTime();
+
+    if (dateTo.getTime() !== nextMonthStart && dateTo.getTime() !== nextMonthStart - 1) {
+        return null;
+    }
+
+    return bangkokMonthStart(year, month - 1);
+};
+
+/**
+ * The period [dateFrom, dateTo) as GET /costs reads it, compared with the previous calendar month
+ * when the period is one Bangkok calendar month, else with the same number of days immediately
+ * before dateFrom. All amounts are in the user's default currency.
  */
 router.get('/analytics/summary', authenticate, async (req, res) => {
     try {
@@ -103,7 +133,8 @@ router.get('/analytics/summary', authenticate, async (req, res) => {
             return res.status(400).json({ error: `The period must not be longer than ${MAX_RANGE_DAYS} days` });
         }
 
-        const previousFrom = new Date(dateFrom.getTime() - days * DAY_MS);
+        const previousFrom = previousCalendarMonthStart(dateFrom, dateTo)
+            ?? new Date(dateFrom.getTime() - days * DAY_MS);
         const costs = await loadCosts(req.user, previousFrom, dateTo);
         const current = costs.filter(cost => cost.date >= dateFrom);
         const previous = costs.filter(cost => cost.date < dateFrom);
@@ -183,12 +214,6 @@ router.get('/analytics/summary', authenticate, async (req, res) => {
         res.status(500).json({ error: 'Failed to build the summary' });
     }
 });
-
-// 'YYYY-MM' of the Bangkok calendar month a moment falls in
-const bangkokMonthKey = (date) => new Date(date.getTime() + BANGKOK_OFFSET_MS).toISOString().slice(0, 7);
-
-// The instant a Bangkok calendar month starts; month may be out of 0-11, as with Date.UTC
-const bangkokMonthStart = (year, month) => new Date(Date.UTC(year, month, 1) - BANGKOK_OFFSET_MS);
 
 /**
  * Totals per Bangkok calendar month for the last `months` months, the current one included, oldest first.

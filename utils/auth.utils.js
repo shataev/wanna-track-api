@@ -6,7 +6,7 @@ const REFRESH_TOKEN_EXPIRATION_TIME_SECONDS = 2 * 60 * 60
 
 // The user as the API hands it out: to route handlers in req.user and to the client from signin/signup/refresh
 const toAuthUser = (user) => {
-    const {username, email, _id: id, defaultCurrency, telegramId, verified} = user;
+    const {username, email, _id: id, defaultCurrency, telegramId, verified, activeTag} = user;
 
     return {
         email,
@@ -15,7 +15,8 @@ const toAuthUser = (user) => {
         defaultCurrency,
         // null rather than undefined, so the key survives JSON for clients that check it
         telegramId: telegramId ?? null,
-        verified
+        verified,
+        activeTag: activeTag ?? null
     }
 }
 

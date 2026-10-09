@@ -29,6 +29,11 @@ const UserSchema = new mongoose.Schema(
       required: true,
       default: 'THB'
     },
+    // Tag given to every new cost that does not say otherwise, e.g. during a trip
+    activeTag: {
+      type: String,
+      default: null
+    },
   },
   {
     timestamps: true

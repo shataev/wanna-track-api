@@ -24,8 +24,9 @@ in the query or body (it is ignored if sent):
 - web: `Authorization: Bearer <accessToken>`, from signin, signup or refresh
 - Telegram bot: `X-Telegram-Bot-Secret` (equal to `TELEGRAM_BOT_SECRET`) and
   `X-Telegram-User-Id`; the request acts as the user linked to that Telegram
-  account. The bot may only call `GET /api/category`, `GET /api/funds` and
-  `POST /api/cost` (plus the two bot routes under `/api/telegram`)
+  account. The bot may only call `GET /api/category`, `GET /api/funds`,
+  `POST /api/cost`, `GET /api/tags`, `GET /api/me` and `PUT /api/me/active-tag`
+  (plus the two bot routes under `/api/telegram`)
 
 No credentials, an invalid or expired token, or an unlinked Telegram id is a
 401; a bot call to any other route is a 403; a bearer and bot headers together
@@ -46,16 +47,33 @@ or a malformed one, is a 404.
 - `POST /api/auth/signout` - Clear the `refreshToken` cookie
 
 Signup, signin and refresh return the user
-(`id`, `username`, `email`, `defaultCurrency`, `telegramId`, `verified`) and an `accessToken`.
+(`id`, `username`, `email`, `defaultCurrency`, `telegramId`, `verified`, `activeTag`) and an `accessToken`.
+
+### Me
+- `GET /api/me` - The caller, in the same shape as signin
+- `PUT /api/me/active-tag` - `{ "tag": "japan-2026" }` sets the tag every new cost gets
+  unless it says otherwise; `null`, or a tag that normalises to nothing, clears it.
+  Returns the user
 
 ### Categories
 - `GET /api/category` - Get the global categories and the caller's own
 - `POST /api/category` - Create a category owned by the caller
 
 ### Costs
-- `GET /api/costs` - Get the caller's costs, grouped by category (`dateFrom`, `dateTo`)
+- `GET /api/costs` - Get the caller's costs, grouped by category (`dateFrom`, `dateTo`).
+  With `tag`, only costs carrying it, and the dates become optional (absent: all time).
+  Each cost carries `tags`, `currency` and `fundAmount` (null without a fund)
 - `POST /api/cost` - Create a cost; the fund, if given, must be the caller's,
   the category must be global or the caller's, and `amount` must be a positive number
+- `PATCH /api/cost/:id` - `{ "tags": [...] }` replaces the tags of one of the caller's costs;
+  nothing else is editable
+- `GET /api/tags` - The caller's tags as `{ tag, count, total, currency, firstDate, lastDate }`,
+  `total` in the default currency, most recently used first
+
+Tags are normalised wherever they enter: trimmed, lowercased, inner whitespace
+turned into `-`, only letters (any script), digits, `-` and `_` kept, at most 32
+characters and 10 tags per cost, duplicates removed. A tag left empty is dropped,
+not rejected.
 
 ### Funds
 - `GET /api/funds` - Get all funds
@@ -85,11 +103,32 @@ Signup, signin and refresh return the user
 ```json
 POST /api/cost
 {
-    "amount": 100,
+    "amount": 1500,
+    "currency": "JPY",          // Optional: default is the fund's currency, else the user's
     "category": "categoryId",
-    "comment": "Grocery shopping",
-    "date": "2024-03-20T10:00:00Z",
-    "fundId": "fundId"  // Optional: link cost to a specific fund
+    "comment": "Ramen",
+    "date": "2026-10-25T10:00:00Z",
+    "fundId": "fundId",         // Optional: link cost to a specific fund
+    "tags": ["japan-2026"]      // Optional: absent means the user's active tag; [] means none
+}
+```
+
+`amount` and `currency` are what was spent. When the fund holds another currency
+the fund is debited `fundAmount`: the amount converted at the stored rate and
+rounded to the fund currency's precision; the balance check uses it too, and
+the fund transaction's description names the original (`Ramen (1500 JPY)`).
+`rate` (currency to the user's default currency) is always computed by the
+server; a `rate` in the body is ignored. A currency without a stored rate is a
+400 and nothing is debited.
+
+```json
+{
+    "amount": 1500,
+    "currency": "JPY",
+    "fundAmount": 366.71,
+    "rate": 0.2444742,
+    "tags": ["japan-2026"],
+    ...
 }
 ```
 

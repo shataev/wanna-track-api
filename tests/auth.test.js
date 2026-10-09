@@ -6,9 +6,9 @@ jest.mock('nodemailer', () => ({
 }));
 
 const app = require('../app');
-const { seedUser, cookieFor, TEST_PASSWORD } = require('./helpers');
+const { seedUser, cookieFor, bearer, TEST_PASSWORD } = require('./helpers');
 
-const FULL_USER_KEYS = ['id', 'username', 'email', 'defaultCurrency', 'telegramId', 'verified'];
+const FULL_USER_KEYS = ['id', 'username', 'email', 'defaultCurrency', 'telegramId', 'verified', 'activeTag'];
 
 const refreshCookieOf = (res) => (res.headers['set-cookie'] || []).find(cookie => cookie.startsWith('refreshToken='));
 
@@ -20,7 +20,8 @@ const expectFullUser = (body, user) => {
         email: user.email,
         defaultCurrency: user.defaultCurrency,
         telegramId: user.telegramId ?? null,
-        verified: user.verified
+        verified: user.verified,
+        activeTag: user.activeTag ?? null
     });
 };
 
@@ -45,6 +46,16 @@ describe('POST /api/auth/refresh', () => {
         const res = await request(app).post('/api/auth/refresh');
 
         expect(res.status).toBe(401);
+        expect(refreshCookieOf(res)).toBeUndefined();
+    });
+
+    it('is 401 with only a bearer and no cookie', async () => {
+        const user = await seedUser();
+
+        const res = await request(app).post('/api/auth/refresh').set(bearer(user));
+
+        expect(res.status).toBe(401);
+        expect(res.body.accessToken).toBeUndefined();
         expect(refreshCookieOf(res)).toBeUndefined();
     });
 
@@ -79,7 +90,7 @@ describe('POST /api/auth/refresh', () => {
 
 describe('signin and signup', () => {
     it('signin returns the full user and an access token, without X-Verification-Code', async () => {
-        const user = await seedUser({ telegramId: '222', defaultCurrency: 'THB' });
+        const user = await seedUser({ telegramId: '222', defaultCurrency: 'THB', activeTag: 'japan-2026' });
 
         const res = await request(app)
             .post('/api/auth/signin')

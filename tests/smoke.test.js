@@ -8,7 +8,6 @@ describe('smoke', () => {
 
         const res = await request(app)
             .post('/api/auth/signin')
-            .set('X-Verification-Code', process.env.VERIFICATION_CODE)
             .send({ email: user.email, password: TEST_PASSWORD });
 
         expect(res.status).toBe(200);

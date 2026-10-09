@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const CryptoJS = require("crypto-js");
 const jwt = require("jsonwebtoken");
+const {toAuthUser} = require("../utils/auth.utils");
 
 /**
  * Проверяет, есть ли пользователь в базе, сравнивает переданный и сохраненный пароль
@@ -31,11 +32,7 @@ module.exports = {
                 return res.status(401).json('Wrong email or password');
             }
 
-            req.user = {
-                username: user.username,
-                email: user.email,
-                id: user._id
-            };
+            req.user = toAuthUser(user);
 
             next();
         } catch (error) {

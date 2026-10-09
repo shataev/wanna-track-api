@@ -1,5 +1,6 @@
 const CryptoJS = require("crypto-js");
 const User = require("../models/User");
+const {toAuthUser} = require("../utils/auth.utils");
 
 /**
  * Создает в базе нового юзера, предварительно захешировав его пароль,
@@ -26,11 +27,7 @@ module.exports = {
         try {
             const user = await newUser.save();
 
-            req.user = {
-                username: user.username,
-                email: user.email,
-                id: user._id
-            };
+            req.user = toAuthUser(user);
 
             next();
         } catch (error) {

@@ -6,7 +6,6 @@ const {getVerificationByUserId, checkVerificationExpiration, removeVerificationB
 const router = require('express').Router();
 const User = require('../models/User');
 const CryptoJS = require("crypto-js");
-const {checkVerificationCodeHeader} = require("../middlewares/checkVerificationCodeHeader");
 const {checkUserInDatabaseById} = require("../middlewares/checkUserInDatabaseById");
 const {checkIsUserVerified} = require("../middlewares/checkIsUserVerified");
 const {deleteVerificationFromDatabase} = require("../middlewares/deleteVerificationFromDatabase");
@@ -78,7 +77,6 @@ router.get('/:userId/:verificationString', async(req, res) => {
  * - create a new item in Verification table
  */
 router.post('/email', [
-    checkVerificationCodeHeader,
     checkUserInDatabaseById,
     checkIsUserVerified,
     deleteVerificationFromDatabase,

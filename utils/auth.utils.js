@@ -4,7 +4,23 @@ const User = require("../models/User");
 const ACCESS_TOKEN_EXPIRATION_TIME_SECONDS = 15 * 60
 const REFRESH_TOKEN_EXPIRATION_TIME_SECONDS = 2 * 60 * 60
 
+// The user as the API hands it out: to route handlers in req.user and to the client from signin/signup/refresh
+const toAuthUser = (user) => {
+    const {username, email, _id: id, defaultCurrency, telegramId, verified} = user;
+
+    return {
+        email,
+        username,
+        id,
+        defaultCurrency,
+        // null rather than undefined, so the key survives JSON for clients that check it
+        telegramId: telegramId ?? null,
+        verified
+    }
+}
+
 module.exports = {
+    toAuthUser,
     ACCESS_TOKEN_EXPIRATION_TIME_SECONDS,
     REFRESH_TOKEN_EXPIRATION_TIME_SECONDS,
     generateAccessToken(user) {
@@ -26,6 +42,20 @@ module.exports = {
             }
         )
     },
+    // The user named by a refresh token, or null when the token is missing, invalid or expired
+    async getUserFromRefreshToken(refreshToken) {
+        if (!refreshToken) {
+            return null;
+        }
+
+        try {
+            const {userId} = jwt.verify(refreshToken, process.env.SECRET_KEY_REFRESH);
+
+            return await module.exports.getUserFromDatabaseById(userId);
+        } catch (error) {
+            return null;
+        }
+    },
     // TODO: db error handling
     async getUserFromDatabaseById(userId) {
         const user = await User.findById(userId);
@@ -34,15 +64,6 @@ module.exports = {
             return null
         }
 
-        const {username, email, _id: id, defaultCurrency, telegramId, verified} = user;
-
-        return {
-            email,
-            username,
-            id,
-            defaultCurrency,
-            telegramId,
-            verified
-        }
+        return toAuthUser(user);
     }
 }

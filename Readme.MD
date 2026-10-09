@@ -17,21 +17,45 @@ A RESTful API for managing personal expenses and funds.
 ## API Endpoints
 
 ### Authentication
-- `POST /api/auth/register` - Register a new user
-- `POST /api/auth/login` - Login user
-- `POST /api/auth/logout` - Logout user
+
+Data routes take the caller's identity from credentials, never from a `userId`
+in the query or body (it is ignored if sent):
+
+- web: `Authorization: Bearer <accessToken>`, from signin, signup or refresh
+- Telegram bot: `X-Telegram-Bot-Secret` (equal to `TELEGRAM_BOT_SECRET`) and
+  `X-Telegram-User-Id`; the request acts as the user linked to that Telegram
+  account. The bot may only call `GET /api/category`, `GET /api/funds` and
+  `POST /api/cost` (plus the two bot routes under `/api/telegram`)
+
+No credentials, an invalid or expired token, or an unlinked Telegram id is a
+401; a bot call to any other route is a 403; a bearer and bot headers together
+are a 400.
+
+While `AUTH_ENFORCE` is not `true`, clients deployed before this scheme keep
+working: the `refreshToken` cookie identifies the web user, and the bot secret
+with a `userId` (no Telegram id) identifies the bot's user. Each such request
+logs `[auth-legacy]`. With `AUTH_ENFORCE=true` both are a 401.
+
+Routes that take an id only find the caller's own records: anybody else's id,
+or a malformed one, is a 404.
+
+- `POST /api/auth/signup` - Register a new user
+- `POST /api/auth/signin` - Sign in; sets the `refreshToken` cookie
+- `POST /api/auth/refresh` - Exchange the `refreshToken` cookie for a new access token; rotates the cookie
+- `GET /api/auth/` - Older silent-auth endpoint, kept for web bundles that predate `/refresh`
+- `POST /api/auth/signout` - Clear the `refreshToken` cookie
+
+Signup, signin and refresh return the user
+(`id`, `username`, `email`, `defaultCurrency`, `telegramId`, `verified`) and an `accessToken`.
 
 ### Categories
-- `GET /api/categories` - Get all categories
-- `POST /api/categories` - Create a new category
-- `PUT /api/categories/:id` - Update a category
-- `DELETE /api/categories/:id` - Delete a category
+- `GET /api/category` - Get the global categories and the caller's own
+- `POST /api/category` - Create a category owned by the caller
 
 ### Costs
-- `GET /api/costs` - Get all costs (with optional date range filter)
-- `POST /api/cost` - Create a new cost
-- `PUT /api/cost/:id` - Update a cost
-- `DELETE /api/cost/:id` - Delete a cost
+- `GET /api/costs` - Get the caller's costs, grouped by category (`dateFrom`, `dateTo`)
+- `POST /api/cost` - Create a cost; the fund, if given, must be the caller's,
+  the category must be global or the caller's, and `amount` must be a positive number
 
 ### Funds
 - `GET /api/funds` - Get all funds
@@ -40,7 +64,20 @@ A RESTful API for managing personal expenses and funds.
 - `DELETE /api/funds/:id` - Delete a fund
 - `GET /api/funds/:id` - Get fund details
 - `GET /api/funds/:id/transactions` - Get fund transactions
+- `GET /api/funds/total` - Total of all funds in the caller's default currency
 - `POST /api/funds/transfer` - Transfer money between funds
+
+### Telegram
+- `GET /api/telegram/telegram-binding-link` - Link that binds the caller's Telegram account
+- `POST /api/telegram/telegram-unbind` - Unbind the caller's Telegram account
+- `POST /api/telegram/telegram-bind`, `GET /api/telegram/user-by-telegram/:telegramId` -
+  bot only, `X-Telegram-Bot-Secret`
+
+### Exchange rates
+- `GET /api/exchange-rates/current`, `GET /api/exchange-rates/currencies` - Public
+- `POST /api/exchange-rates/update` - Fetch fresh rates from the paid API by hand;
+  needs `X-Admin-Secret` equal to `ADMIN_SECRET`, and does not exist (404) while
+  `ADMIN_SECRET` is unset. A daily cron updates the rates without it.
 
 ## Request/Response Examples
 
@@ -51,9 +88,8 @@ POST /api/cost
     "amount": 100,
     "category": "categoryId",
     "comment": "Grocery shopping",
-    "userId": "userId",
     "date": "2024-03-20T10:00:00Z",
-    "fund": "fundId"  // Optional: link cost to a specific fund
+    "fundId": "fundId"  // Optional: link cost to a specific fund
 }
 ```
 
@@ -65,8 +101,7 @@ POST /api/funds
     "icon": "💰",
     "description": "Primary spending account",
     "initialBalance": 1000,
-    "isDefault": true,
-    "userId": "userId"
+    "isDefault": true
 }
 ```
 
@@ -74,7 +109,6 @@ POST /api/funds
 ```json
 POST /api/funds/transfer
 {
-    "userId": "userId",
     "fromFundId": "sourceFundId",
     "toFundId": "targetFundId",
     "amount": 500,

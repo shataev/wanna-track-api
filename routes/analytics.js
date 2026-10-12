@@ -111,7 +111,8 @@ const previousCalendarMonthStart = (dateFrom, dateTo) => {
 /**
  * The period [dateFrom, dateTo) as GET /costs reads it, compared with the previous calendar month
  * when the period is one Bangkok calendar month, else with the same number of days immediately
- * before dateFrom. All amounts are in the user's default currency.
+ * before dateFrom. While the period is under way, the comparison covers only as much of the previous
+ * period as has elapsed of this one. All amounts are in the user's default currency.
  */
 router.get('/analytics/summary', authenticate, async (req, res) => {
     try {
@@ -135,20 +136,30 @@ router.get('/analytics/summary', authenticate, async (req, res) => {
 
         const previousFrom = previousCalendarMonthStart(dateFrom, dateTo)
             ?? new Date(dateFrom.getTime() - days * DAY_MS);
+        const now = Date.now();
+        const inProgress = now >= dateFrom.getTime() && now < dateTo.getTime();
+
+        // While the period is under way, the same elapsed span of the previous one, never past its end
+        const comparedTo = inProgress
+            ? new Date(Math.min(previousFrom.getTime() + (now - dateFrom.getTime()), dateFrom.getTime()))
+            : dateFrom;
+
         const costs = await loadCosts(req.user, previousFrom, dateTo);
         const current = costs.filter(cost => cost.date >= dateFrom);
-        const previous = costs.filter(cost => cost.date < dateFrom);
+        const previousFull = costs.filter(cost => cost.date < dateFrom);
+        const previous = previousFull.filter(cost => cost.date < comparedTo);
 
         const total = sumOf(current);
         const previousTotal = sumOf(previous);
 
-        // Only while the period is under way: the pace so far, carried to its end
-        const now = Date.now();
+        // While the period is under way: the pace so far over the days started, and that pace carried to its end
+        let avgPerDay = round2(total / days);
         let projection = null;
 
-        if (now >= dateFrom.getTime() && now < dateTo.getTime()) {
+        if (inProgress) {
             const elapsedDays = Math.max(1, Math.ceil((now - dateFrom) / DAY_MS));
 
+            avgPerDay = round2(total / elapsedDays);
             projection = round2(total / elapsedDays * days);
         }
 
@@ -201,9 +212,15 @@ router.get('/analytics/summary', authenticate, async (req, res) => {
             period: { dateFrom, dateTo, days },
             total,
             count: current.length,
-            avgPerDay: round2(total / days),
+            avgPerDay,
             projection,
-            previous: { dateFrom: previousFrom, dateTo: dateFrom, total: previousTotal, count: previous.length },
+            previous: {
+                dateFrom: previousFrom,
+                dateTo: comparedTo,
+                total: previousTotal,
+                count: previous.length,
+                fullTotal: sumOf(previousFull)
+            },
             categories: categoryList,
             funds,
             tags,

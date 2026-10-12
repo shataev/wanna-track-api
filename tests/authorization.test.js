@@ -15,8 +15,12 @@ const {
 let a;
 let b;
 
-// PATCH /api/cost/:id needs a cost of A's to succeed; it is created only by the tests that expect success
+// GET/PATCH/DELETE /api/cost/:id need a cost of A's to succeed; it is created only by the tests that expect success
 const A_COST_ID = new mongoose.Types.ObjectId();
+
+const seedACost = () => Cost.create({
+    _id: A_COST_ID, amount: 1, currency: 'USD', rate: 1, category: a.category._id, date: new Date('2026-10-01'), user: a.user._id
+});
 
 beforeEach(async () => {
     await ExchangeRate.create({ base: 'USD', rates: new Map([['THB', 36], ['EUR', 0.9]]) });
@@ -69,10 +73,10 @@ const ROUTES = [
     { name: 'GET /api/costs?tag=', method: 'get', path: () => '/api/costs?tag=japan-2026', bot: false },
     {
         name: 'PATCH /api/cost/:id', method: 'patch', path: () => `/api/cost/${A_COST_ID}`, body: () => ({ tags: ['japan'] }), bot: false,
-        prepare: () => Cost.create({
-            _id: A_COST_ID, amount: 1, currency: 'USD', rate: 1, category: a.category._id, date: new Date('2026-10-01'), user: a.user._id
-        })
+        prepare: seedACost
     },
+    { name: 'GET /api/cost/:id', method: 'get', path: () => `/api/cost/${A_COST_ID}`, bot: false, prepare: seedACost },
+    { name: 'DELETE /api/cost/:id', method: 'delete', path: () => `/api/cost/${A_COST_ID}`, bot: false, prepare: seedACost },
     { name: 'GET /api/tags', method: 'get', path: () => '/api/tags', bot: true },
     { name: 'GET /api/me', method: 'get', path: () => '/api/me', bot: true },
     { name: 'PUT /api/me/active-tag', method: 'put', path: () => '/api/me/active-tag', body: () => ({ tag: 'japan' }), bot: true },

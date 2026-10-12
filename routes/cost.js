@@ -72,6 +72,39 @@ const createRateGetter = () => {
     };
 };
 
+/**
+ * What a cost of `amount` in `currency` is worth: `rate` (currency -> user's default currency) and, with a fund,
+ * `fundAmount`, what the fund is debited in its own currency. A `rate` passed in is kept rather than looked up.
+ * Resolves to { rate, fundAmount } or to { status, error } for the response. Used by every route that debits.
+ */
+const priceCost = async ({ amount, currency, fund, userCurrency, getRate, rate }) => {
+    const toUser = rate === undefined ? await getRate(currency, userCurrency) : { rate };
+
+    if (toUser.error) {
+        return toUser;
+    }
+
+    if (!fund) {
+        return { rate: toUser.rate, fundAmount: undefined };
+    }
+
+    const toFund = await getRate(currency, fund.currency);
+
+    if (toFund.error) {
+        return toFund;
+    }
+
+    const fundAmount = currency === fund.currency
+        ? amount
+        : roundToCurrencyPrecision(amount * toFund.rate, fund.currency);
+
+    if (fundAmount <= 0) {
+        return { status: 400, error: `Amount is too small to debit in ${fund.currency}` };
+    }
+
+    return { rate: toUser.rate, fundAmount };
+};
+
 // Get all user's costs
 router.get('/costs', authenticate, async (req, res) => {
     try {
@@ -249,10 +282,8 @@ router.post('/cost', authenticateUserOrBot, async (req, res) => {
         }
 
         const userCurrency = req.user.defaultCurrency || 'USD';
-        const getRate = createRateGetter();
 
         let fund = null;
-        let fundAmount;
 
         if (fundId) {
             fund = await findOwnedFund(fundId, userId);
@@ -265,27 +296,15 @@ router.post('/cost', authenticateUserOrBot, async (req, res) => {
         // Without a currency: the fund's, else the user's default, as before
         const currency = requestedCurrency || (fund ? fund.currency : userCurrency);
 
-        const toUser = await getRate(currency, userCurrency);
+        const price = await priceCost({ amount, currency, fund, userCurrency, getRate: createRateGetter() });
 
-        if (toUser.error) {
-            return res.status(toUser.status).json({ error: toUser.error });
+        if (price.error) {
+            return res.status(price.status).json({ error: price.error });
         }
 
+        const { fundAmount } = price;
+
         if (fund) {
-            const toFund = await getRate(currency, fund.currency);
-
-            if (toFund.error) {
-                return res.status(toFund.status).json({ error: toFund.error });
-            }
-
-            fundAmount = currency === fund.currency
-                ? amount
-                : roundToCurrencyPrecision(amount * toFund.rate, fund.currency);
-
-            if (fundAmount <= 0) {
-                return res.status(400).json({ error: `Amount is too small to debit in ${fund.currency}` });
-            }
-
             if (fund.currentBalance < fundAmount) {
                 return res.status(400).json({ error: 'Insufficient funds' });
             }
@@ -311,7 +330,7 @@ router.post('/cost', authenticateUserOrBot, async (req, res) => {
         const newCost = new Cost({
             amount,
             currency,
-            rate: toUser.rate,
+            rate: price.rate,
             category: categoryId,
             comment,
             date,

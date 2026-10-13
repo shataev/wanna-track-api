@@ -252,7 +252,72 @@ const listTags = (user) => {
     ]);
 };
 
+/**
+ * The caller's costs, newest first, each with its category, fund and amountInUserCurrency: the joins of
+ * GET /api/costs, so a cost whose category is gone is left out here too. Every filter is optional:
+ * `from`/`to` (Dates, [from, to)), `tag` (stored form), `categoryId`, `fundId`, `costId` (ObjectIds), `limit`.
+ */
+const listCosts = (user, { from, to, tag, categoryId, fundId, costId, limit } = {}) => {
+    const match = { user: user.id };
+
+    if (from || to) {
+        match.date = {};
+
+        if (from) {
+            match.date.$gte = from;
+        }
+
+        if (to) {
+            match.date.$lt = to;
+        }
+    }
+
+    if (tag) {
+        match.tags = tag;
+    }
+
+    if (categoryId) {
+        match.category = categoryId;
+    }
+
+    if (fundId) {
+        match.fund = fundId;
+    }
+
+    if (costId) {
+        match._id = costId;
+    }
+
+    return Cost.aggregate([
+        { $match: match },
+        { $sort: { date: -1, _id: -1 } },
+        { $lookup: { from: 'categories', localField: 'category', foreignField: '_id', as: 'category' } },
+        { $unwind: '$category' },
+        { $lookup: { from: 'funds', localField: 'fund', foreignField: '_id', as: 'fund' } },
+        { $unwind: { path: '$fund', preserveNullAndEmptyArrays: true } },
+        ...(limit ? [{ $limit: limit }] : []),
+        ...userCurrencyStages(user.defaultCurrency || 'USD'),
+        {
+            $project: {
+                date: 1,
+                amount: 1,
+                currency: 1,
+                amountInUserCurrency: 1,
+                comment: 1,
+                tags: { $ifNull: ['$tags', []] },
+                category: { _id: 1, name: 1, icon: 1 },
+                fund: { _id: 1, name: 1, currency: 1 },
+                // In the fund's currency; costs older than fundAmount were debited `amount`
+                fundAmount: {
+                    $cond: [{ $ifNull: ['$fund', false] }, { $ifNull: ['$fundAmount', '$amount'] }, null]
+                }
+            }
+        }
+    ]);
+};
+
 module.exports = {
+    listCosts,
     parseAmount,
     parseCurrency,
     createRateGetter,

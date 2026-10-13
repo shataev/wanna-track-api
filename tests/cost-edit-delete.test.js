@@ -419,6 +419,98 @@ describe('PATCH /api/cost/:id without moving money', () => {
     );
 });
 
+describe('a cost saved before currency and rate existed', () => {
+    // Inserted past the model, as such documents are in production: no currency, rate, tags or fundAmount
+    const insertLegacyCost = async (overrides = {}) => {
+        const { insertedId } = await Cost.collection.insertOne({
+            amount: 100,
+            category: a.category._id,
+            date: new Date('2024-05-01'),
+            comment: 'Ramen',
+            user: a.user._id,
+            fund: a.card._id,
+            ...overrides
+        });
+
+        return insertedId;
+    };
+
+    it('takes a change of tags only, in the default currency at rate 1, moving no money', async () => {
+        const id = await insertLegacyCost();
+
+        const res = await patchCost(a, id, { tags: ['old-trip'] });
+
+        expect(res.status).toBe(200);
+        expect(res.body.tags).toEqual(['old-trip']);
+        const saved = await Cost.findById(id).lean();
+        expect(saved).toMatchObject({ currency: 'THB', rate: 1, amount: 100 });
+        expect(await balanceOf(a.card)).toBe(1000);
+        expect(await FundTransaction.countDocuments()).toBe(0);
+    });
+
+    it('takes a change of comment only', async () => {
+        const id = await insertLegacyCost();
+
+        const res = await patchCost(a, id, { comment: 'Sushi' });
+
+        expect(res.status).toBe(200);
+        expect((await Cost.findById(id)).comment).toBe('Sushi');
+        expect(await FundTransaction.countDocuments()).toBe(0);
+    });
+
+    it('takes a change of amount, refunding `amount` and debiting the new one', async () => {
+        const id = await insertLegacyCost();
+
+        const res = await patchCost(a, id, { amount: 150 });
+
+        expect(res.status).toBe(200);
+        expect(await balanceOf(a.card)).toBe(950);
+        expect(await historyOf(a.card)).toEqual([
+            { type: 'refund', amount: 100, description: 'Edited: Ramen' },
+            { type: 'expense', amount: -150, description: 'Edited: Ramen' }
+        ]);
+        expect(await Cost.findById(id).lean()).toMatchObject({ amount: 150, currency: 'THB', rate: 1, fundAmount: 150 });
+    });
+
+    it('is deleted with its amount credited back', async () => {
+        const id = await insertLegacyCost();
+
+        expect((await deleteCost(a, id)).status).toBe(204);
+        expect(await balanceOf(a.card)).toBe(1100);
+        expect(await historyOf(a.card)).toEqual([{ type: 'refund', amount: 100, description: 'Deleted: Ramen' }]);
+    });
+});
+
+describe('a foreign-currency cost', () => {
+    it('is edited by refunding its converted fundAmount and debiting the new converted amount', async () => {
+        const cost = await createCost(a, { amount: 1500, currency: 'JPY' });
+        expect(await balanceOf(a.card)).toBeCloseTo(1000 - RAMEN_IN_THB, 6);
+
+        const res = await patchCost(a, cost._id, { amount: 3000 });
+
+        expect(res.status).toBe(200);
+        expect(res.body.fundAmount).toBe(733.42);
+        expect(await balanceOf(a.card)).toBeCloseTo(1000 - 733.42, 6);
+        expect((await historyOf(a.card)).slice(1)).toEqual([
+            { type: 'refund', amount: RAMEN_IN_THB, description: 'Edited: Ramen (1500 JPY)' },
+            { type: 'expense', amount: -733.42, description: 'Edited: Ramen (3000 JPY)' }
+        ]);
+    });
+
+    it('moved to another fund gives the old fund back its converted fundAmount', async () => {
+        const cost = await createCost(a, { amount: 1500, currency: 'JPY' });
+
+        const res = await patchCost(a, cost._id, { fundId: a.cash._id.toString(), amount: 300 });
+
+        expect(res.status).toBe(200);
+        expect(await balanceOf(a.card)).toBeCloseTo(1000, 6);
+        expect((await historyOf(a.card))[1]).toEqual(
+            { type: 'refund', amount: RAMEN_IN_THB, description: 'Edited: Ramen (1500 JPY)' }
+        );
+        expect(await balanceOf(a.cash)).toBeCloseTo(200 - 73.34, 6);
+    });
+});
+
 describe('GET /api/cost/:id', () => {
     it('returns the cost with category, fund, tags and fundAmount', async () => {
         const cost = await createCost(a, { amount: 1500, currency: 'JPY', tags: ['japan-2026'] });
@@ -461,6 +553,22 @@ describe('ownership and identity', () => {
 
         expect(await snapshot()).toEqual(before);
         expect(await balanceOf(b.card)).toBe(900);
+    });
+
+    // Not reachable through the API, which checks the fund's owner; seeded to prove the refund lookups are scoped too
+    it('never credits B\'s fund for A\'s cost that points at it', async () => {
+        const seed = () => Cost.create({
+            amount: 100, currency: 'THB', rate: 1, category: a.category._id, date: new Date('2026-10-25'),
+            user: a.user._id, fund: b.card._id, fundAmount: 100
+        });
+
+        const edited = await seed();
+        expect((await patchCost(a, edited._id, { fundId: null })).status).toBe(200);
+        expect((await patchCost(a, (await seed())._id, { amount: 50 })).status).toBe(404);
+        expect((await deleteCost(a, (await seed())._id)).status).toBe(204);
+
+        expect(await balanceOf(b.card)).toBe(1000);
+        expect(await FundTransaction.countDocuments()).toBe(0);
     });
 
     it.each([['not-an-id'], ['652f1c2e9b1d8a0012345678'], ['123']])('is 404 for id %s', async (id) => {

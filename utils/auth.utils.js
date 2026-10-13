@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const CryptoJS = require("crypto-js");
 const User = require("../models/User");
 
 const ACCESS_TOKEN_EXPIRATION_TIME_SECONDS = 15 * 60
@@ -20,8 +21,16 @@ const toAuthUser = (user) => {
     }
 }
 
+// Whether a password matches the one stored for the user; the check of /api/auth/signin
+const passwordMatches = (user, password) => {
+    const passwordFromDb = CryptoJS.AES.decrypt(user.password, process.env.SECRET_KEY).toString(CryptoJS.enc.Utf8);
+
+    return password === passwordFromDb;
+}
+
 module.exports = {
     toAuthUser,
+    passwordMatches,
     ACCESS_TOKEN_EXPIRATION_TIME_SECONDS,
     REFRESH_TOKEN_EXPIRATION_TIME_SECONDS,
     generateAccessToken(user) {

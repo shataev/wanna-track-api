@@ -1,7 +1,6 @@
 const User = require("../models/User");
-const CryptoJS = require("crypto-js");
 const jwt = require("jsonwebtoken");
-const {toAuthUser} = require("../utils/auth.utils");
+const {toAuthUser, passwordMatches} = require("../utils/auth.utils");
 
 /**
  * Проверяет, есть ли пользователь в базе, сравнивает переданный и сохраненный пароль
@@ -25,10 +24,7 @@ module.exports = {
                 return res.status(401).json('Wrong email or password');
             }
 
-            const bytes  = CryptoJS.AES.decrypt(user.password, process.env.SECRET_KEY);
-            const passwordFromDb = bytes.toString(CryptoJS.enc.Utf8);
-
-            if (passwordFromClient !== passwordFromDb) {
+            if (!passwordMatches(user, passwordFromClient)) {
                 return res.status(401).json('Wrong email or password');
             }
 

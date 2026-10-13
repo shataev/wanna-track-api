@@ -8,6 +8,9 @@ const fundsRoute = require('./routes/fund');
 const exchangeRatesRoute = require('./routes/exchange-rates');
 const meRoute = require('./routes/me');
 const analyticsRoute = require('./routes/analytics');
+const oauthRoute = require('./routes/oauth');
+const oauthGrantsRoute = require('./routes/oauth-grants');
+const mcpRoute = require('./routes/mcp');
 const cors = require('cors');
 const cookieParser = require("cookie-parser");
 
@@ -16,10 +19,19 @@ const cookieParser = require("cookie-parser");
 
 const app = express();
 
+// Behind CapRover's nginx: req.ip is the client's address, which the OAuth sign-in guard counts by
+app.set('trust proxy', 1);
+
 // CORS set up
 const ORIGIN = process.env.stage === 'development' ? 'http://localhost:5173' : process.env.CLIENT_URL;
 
 app.use(cookieParser());
+
+// OAuth and MCP are called by Claude, not by the web app: they stay outside the web app's CORS policy
+// and parse their own bodies
+app.use(oauthRoute);
+app.use(mcpRoute);
+
 app.use(cors({
     origin: ORIGIN,
     methods: ['GET', 'PUT', 'POST', 'PATCH', 'DELETE'],
@@ -35,7 +47,7 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', authRoute);
 app.use('/api/telegram', telegramRoute);
-app.use('/api', [costRoute, categoryRoute, fundsRoute, meRoute, analyticsRoute]);
+app.use('/api', [costRoute, categoryRoute, fundsRoute, meRoute, analyticsRoute, oauthGrantsRoute]);
 app.use('/api/verify', verifyRoute);
 app.use('/api/exchange-rates', exchangeRatesRoute);
 

@@ -43,6 +43,8 @@ module.exports = {
             }
         )
     },
+    // The refresh cookie of before sessions (2026-10-13): nothing issues it any more, /api/auth/refresh migrates
+    // one still valid into a session. Remove with that migration in the post-trip cleanup
     generateRefreshToken(userId) {
         return jwt.sign(
             {userId},

@@ -1,16 +1,20 @@
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const User = require('../models/User');
-const { getUserFromDatabaseById, getUserFromRefreshToken, toAuthUser } = require('../utils/auth.utils');
+const { getUserFromDatabaseById, toAuthUser } = require('../utils/auth.utils');
+const { findSessionUser } = require('../services/sessionService');
+const { COOKIE_NAME } = require('../utils/refreshCookie');
 const { isSecretValid } = require('./checkTelegramBotSecret');
 
 /**
- * Sets req.user (the shape of toAuthUser) and req.auth ('user' or 'bot') from exactly one credential:
+ * Sets req.user (the shape of toAuthUser) and req.auth ('user' or 'bot') from exactly one credential,
+ * and req.sessionId for a user signed in on the web (null for the bot and older tokens):
  * - Authorization: Bearer <access token>; an invalid or expired token is a 401, never a fallback to the cookie
  * - X-Telegram-Bot-Secret + X-Telegram-User-Id; the user is the one linked to that Telegram id
  *
  * While AUTH_ENFORCE is not 'true', two legacy paths keep the clients deployed before this change working:
- * - legacy web: the refreshToken cookie names the user (the old web sends no bearer on data calls)
+ * - legacy web: the refreshToken cookie names the user (the old web sends no bearer on data calls); only a
+ *   cookie set before it moved to /api/auth still reaches the data routes
  * - legacy bot: the bot secret + a userId in the query or body (the old bot sends no Telegram id)
  * A userId on its own is never trusted.
  *
@@ -33,9 +37,10 @@ const findUserById = async (id) => {
 
 const fromBearer = async (authHeader) => {
     try {
-        const { id } = jwt.verify(authHeader.slice('Bearer '.length).trim(), process.env.SECRET_KEY);
+        const { id, sid } = jwt.verify(authHeader.slice('Bearer '.length).trim(), process.env.SECRET_KEY);
+        const user = await findUserById(id);
 
-        return await findUserById(id);
+        return user ? { user, sessionId: typeof sid === 'string' ? sid : null } : null;
     } catch (error) {
         return null;
     }
@@ -52,14 +57,14 @@ const resolve = async (req, res) => {
     }
 
     if (hasBearer) {
-        const user = await fromBearer(authHeader);
+        const identity = await fromBearer(authHeader);
 
-        if (!user) {
+        if (!identity) {
             unauthorized(res, 'invalid or expired access token');
             return null;
         }
 
-        return { user, auth: 'user' };
+        return { ...identity, auth: 'user' };
     }
 
     if (hasBotSecret) {
@@ -107,15 +112,15 @@ const resolve = async (req, res) => {
         return { user, auth: 'bot' };
     }
 
-    const refreshToken = req.cookies?.refreshToken;
+    const refreshToken = req.cookies?.[COOKIE_NAME];
 
     if (!isEnforced() && refreshToken) {
-        const user = await getUserFromRefreshToken(refreshToken);
+        const identity = await findSessionUser(refreshToken);
 
-        if (user) {
+        if (identity) {
             logLegacy('web', req);
 
-            return { user, auth: 'user' };
+            return { ...identity, auth: 'user' };
         }
     }
 
@@ -137,6 +142,7 @@ const createAuthenticate = ({ allowBot }) => async (req, res, next) => {
 
         req.user = identity.user;
         req.auth = identity.auth;
+        req.sessionId = identity.sessionId ?? null;
 
         next();
     } catch (error) {

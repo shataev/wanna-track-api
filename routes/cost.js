@@ -489,7 +489,17 @@ router.patch('/cost/:id', authenticate, async (req, res) => {
             }
         }
 
-        const oldCurrency = cost.currency || userCurrency;
+        // Costs saved before currency and rate existed are in the default currency at rate 1, as everywhere else;
+        // saving the edit needs both, as the schema requires them
+        if (!cost.currency) {
+            cost.currency = userCurrency;
+        }
+
+        if (cost.rate === undefined || cost.rate === null) {
+            cost.rate = 1;
+        }
+
+        const oldCurrency = cost.currency;
         let currency = oldCurrency;
 
         if (body.currency !== undefined && body.currency !== null && body.currency !== '') {
@@ -597,7 +607,10 @@ router.delete('/cost/:id', authenticate, async (req, res) => {
         const fund = cost.fund && await Fund.findOne({ _id: cost.fund, userId });
 
         if (fund) {
-            await refundFund(fund, debitOf(cost), await describeCost('Deleted', cost, fund));
+            const { comment, category, amount } = cost;
+            const currency = cost.currency || req.user.defaultCurrency || 'USD';
+
+            await refundFund(fund, debitOf(cost), await describeCost('Deleted', { comment, category, amount, currency }, fund));
         }
 
         await Cost.deleteOne({ _id: cost._id });

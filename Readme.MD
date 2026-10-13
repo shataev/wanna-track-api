@@ -13,6 +13,7 @@ A RESTful API for managing personal expenses and funds.
 - Default fund support
 - Fund balance management
 - Fund transfers between accounts
+- An MCP server for Claude (claude.ai, Desktop, mobile, Claude Code), behind OAuth
 
 ## API Endpoints
 
@@ -128,6 +129,36 @@ currency/rate counts at rate 1).
 - `POST /api/exchange-rates/update` - Fetch fresh rates from the paid API by hand;
   needs `X-Admin-Secret` equal to `ADMIN_SECRET`, and does not exist (404) while
   `ADMIN_SECRET` is unset. A daily cron updates the rates without it.
+
+### Claude (MCP and OAuth)
+Claude connects as a custom connector: in claude.ai → Settings → Connectors → Add
+custom connector, URL `https://api.wannatrack.shataev.com/mcp` (Claude Code:
+`claude mcp add --transport http wanna-track https://api.wannatrack.shataev.com/mcp`).
+Claude registers itself, the user signs in on the API's own page and decides whether
+Claude may add expenses.
+
+- `POST /mcp` - MCP over Streamable HTTP, stateless. Only an OAuth access token from
+  `/oauth/token` is accepted (no JWT, no bot secret); without one: 401 with
+  `WWW-Authenticate: Bearer resource_metadata=…, scope=…`. Tools: `get_profile`,
+  `list_categories`, `list_funds`, `list_tags`, `list_expenses`, `get_summary`,
+  `get_monthly_trend` (scope `expenses.read`), and `add_expense`, `set_active_tag`
+  (scope `expenses.write`, not even listed without it). They use the same services as
+  the REST routes, so amounts and totals match the web app.
+- `GET /.well-known/oauth-protected-resource[/mcp]`, `GET /.well-known/oauth-authorization-server` - Discovery
+- `POST /oauth/register` - Dynamic client registration; public clients only, and only
+  with `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`
+  or `http://localhost|127.0.0.1:<any port>/callback`
+- `GET/POST /oauth/authorize` - Sign in (10 failed attempts per IP or email in 15
+  minutes lock the form) and consent; PKCE S256 required
+- `POST /oauth/token` - Form-encoded `authorization_code` and `refresh_token` grants.
+  Access tokens last 1 hour, refresh tokens 30 days and work once: each refresh returns
+  a new one, and presenting a used one revokes the whole grant
+- `POST /oauth/revoke` - RFC 7009
+- `GET /api/oauth/grants`, `DELETE /api/oauth/grants/:id` - The caller's connected apps
+  and disconnecting one (all its tokens stop working); bearer JWT
+
+`PUBLIC_API_URL` (default `https://api.wannatrack.shataev.com`) sets the issuer and the
+resource URL for a local run.
 
 ## Request/Response Examples
 

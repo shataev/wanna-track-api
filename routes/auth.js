@@ -1,17 +1,17 @@
 const router = require('express').Router();
-const { setRefreshTokenCookie } = require('../middlewares/setRefreshTokenCookie');
 const { createUser } = require("../middlewares/createUser");
 const { setAccessTokenToReq } = require("../middlewares/setAccessTokenToReq");
 const { checkUserInDatabase } = require("../middlewares/checkUserInDatabase");
-const { checkAccessToken } = require("../middlewares/checkAuth");
 const { sendVerificationEmail } = require("../middlewares/sendVerificationEmail");
-const { getUserFromRefreshToken } = require("../utils/auth.utils");
+const { startSession, refreshFromCookie } = require("../middlewares/session");
+const { revokeByCookie } = require("../services/sessionService");
+const { clearRefreshCookies, COOKIE_NAME } = require("../utils/refreshCookie");
 
 // Silent Authentication
-// Kept for web bundles deployed before POST /refresh existed
+// Kept for web bundles deployed before POST /refresh existed; the same exchange of the cookie as /refresh
 router.get('/', [
-    checkAccessToken,
-    setRefreshTokenCookie,
+    refreshFromCookie,
+    setAccessTokenToReq,
     (req, res) => {
         res
             .status(201)
@@ -22,18 +22,7 @@ router.get('/', [
 
 // Refresh: the only route that authenticates by the refresh cookie on purpose
 router.post('/refresh', [
-    async (req, res, next) => {
-        const user = await getUserFromRefreshToken(req.cookies?.refreshToken);
-
-        if (!user) {
-            return res.status(401).json({ message: 'Unauthorized: missing, invalid or expired refresh token' });
-        }
-
-        req.user = user;
-
-        next();
-    },
-    setRefreshTokenCookie,
+    refreshFromCookie,
     setAccessTokenToReq,
     (req, res) => {
         res
@@ -49,7 +38,7 @@ router.post('/refresh', [
 router.post('/signup', [
     createUser,
     sendVerificationEmail,
-    setRefreshTokenCookie,
+    startSession,
     setAccessTokenToReq,
     (req, res) => {
       res
@@ -67,7 +56,7 @@ router.post('/signup', [
 // SignIn
 router.post('/signin', [
     checkUserInDatabase,
-    setRefreshTokenCookie,
+    startSession,
     setAccessTokenToReq,
     (req, res) => {
         res.status(200)
@@ -78,13 +67,16 @@ router.post('/signin', [
     }
 ])
 
-// SignOut
+// SignOut: ends the session of the cookie; needs no access token, it may have expired
 router.post('/signout', async (req, res) => {
-    // Clear cookie
-    res.cookie('refreshToken', null, {
-        httpOnly: true,
-        expires: new Date(Date.now()),
-    });
+    try {
+        await revokeByCookie(req.cookies?.[COOKIE_NAME]);
+    } catch (error) {
+        console.error('[signout] error', error);
+        return res.status(500).json({ message: 'Failed to sign out' });
+    }
+
+    clearRefreshCookies(res);
 
     res
       .status(200)

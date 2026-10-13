@@ -65,8 +65,17 @@ Signup, signin and refresh return the user
   Each cost carries `tags`, `currency` and `fundAmount` (null without a fund)
 - `POST /api/cost` - Create a cost; the fund, if given, must be the caller's,
   the category must be global or the caller's, and `amount` must be a positive number
-- `PATCH /api/cost/:id` - `{ "tags": [...] }` replaces the tags of one of the caller's costs;
-  nothing else is editable
+- `GET /api/cost/:id` - One of the caller's costs with its category, its fund
+  (`_id`, `name`, `currency`), `tags` and `fundAmount` (null without a fund)
+- `PATCH /api/cost/:id` - Edit one of the caller's costs; every field is optional:
+  `amount`, `currency`, `fundId` (`null` takes it off any fund), `category`, `date`,
+  `comment`, `tags` (replaced, normalised). Other fields are ignored. Returns the cost
+  as `GET` does. When `amount`, `currency` or the fund change, the old fund is credited
+  back (a `refund` transaction) and the new one debited (an `expense`), both described
+  `Edited: …`; in the same fund the old debit counts as available. `rate` is recomputed
+  only when the currency changes. Nothing is written when any check fails
+- `DELETE /api/cost/:id` - Delete one of the caller's costs; its fund, if it still
+  exists, is credited back with a `refund` transaction `Deleted: …`. 204
 - `GET /api/tags` - The caller's tags as `{ tag, count, total, currency, firstDate, lastDate }`,
   `total` in the default currency, most recently used first
 
@@ -210,7 +219,10 @@ derived from the transaction history, so nothing recomputes it.
 
 `POST /api/cost` has the same gap on a smaller scale — the fund balance is
 saved first and the `Cost` document after it, so a crash in between leaves
-money spent with no expense recorded.
+money spent with no expense recorded. Editing and deleting a cost write the
+refund first, then the new debit, then the cost: an interrupted request leaves
+the money with the user, but a retried delete or two concurrent edits can
+credit a fund twice.
 
 The realistic trigger is not exotic: a CapRover redeploy, an OOM kill or a
 dropped Atlas connection while a request is in flight.

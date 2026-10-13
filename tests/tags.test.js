@@ -276,7 +276,7 @@ describe('PATCH /api/cost/:id', () => {
         const cost = await seedCost(a, { tags: ['old'], fund: a.thbFund._id, fundAmount: 100 });
 
         const res = await request(app).patch(`/api/cost/${cost._id}`).set(bearer(a.user))
-            .send({ tags: ['Japan 2026', 'japan-2026', 'Food'], amount: 1, fundAmount: 1, user: b.user._id.toString() });
+            .send({ tags: ['Japan 2026', 'japan-2026', 'Food'], fundAmount: 1, rate: 5, user: b.user._id.toString() });
 
         expect(res.status).toBe(200);
         expect(res.body.tags).toEqual(['japan-2026', 'food']);
@@ -285,6 +285,7 @@ describe('PATCH /api/cost/:id', () => {
         expect(saved.tags).toEqual(['japan-2026', 'food']);
         expect(saved.amount).toBe(100);
         expect(saved.fundAmount).toBe(100);
+        expect(saved.rate).toBe(1);
         expect(saved.user.toString()).toBe(a.user._id.toString());
     });
 
@@ -313,7 +314,7 @@ describe('PATCH /api/cost/:id', () => {
         expect(res.status).toBe(404);
     });
 
-    it.each([['absent', {}], ['a string', { tags: 'japan' }], ['null', { tags: null }]])(
+    it.each([['a string', { tags: 'japan' }], ['null', { tags: null }]])(
         'is 400 when tags is %s and keeps the tags',
         async (label, body) => {
             const cost = await seedCost(a, { tags: ['old'] });

@@ -41,14 +41,34 @@ logs `[auth-legacy]`. With `AUTH_ENFORCE=true` both are a 401.
 Routes that take an id only find the caller's own records: anybody else's id,
 or a malformed one, is a 404.
 
-- `POST /api/auth/signup` - Register a new user
-- `POST /api/auth/signin` - Sign in; sets the `refreshToken` cookie
+- `POST /api/auth/signup` - Register a new user; starts a session
+- `POST /api/auth/signin` - Sign in; starts a session and sets the `refreshToken` cookie
 - `POST /api/auth/refresh` - Exchange the `refreshToken` cookie for a new access token; rotates the cookie
-- `GET /api/auth/` - Older silent-auth endpoint, kept for web bundles that predate `/refresh`
-- `POST /api/auth/signout` - Clear the `refreshToken` cookie
+- `GET /api/auth/` - Older silent-auth endpoint, kept for web bundles that predate `/refresh`; the same exchange
+- `POST /api/auth/signout` - End the cookie's session and clear the cookie; needs no access token
 
 Signup, signin and refresh return the user
 (`id`, `username`, `email`, `defaultCurrency`, `telegramId`, `verified`, `activeTag`) and an `accessToken`.
+
+### Sessions
+Every web sign-in is a session in the database. The `refreshToken` cookie
+(`httpOnly`, `secure`, `sameSite=lax`, path `/api/auth`, so data routes never see
+it) holds a random secret; only its sha256 is stored. Every refresh replaces the
+secret and moves the session's end to 90 days later, never past 180 days after
+sign-in. The secret just replaced still works for 30 seconds (two tabs refreshing
+at once), without a new cookie; after that, presenting it revokes the session.
+The access token lives 15 minutes and names its session (`sid`).
+
+A refresh JWT cookie from before sessions (path `/`) becomes a session on its
+first refresh; that migration goes in the post-trip cleanup.
+
+- `GET /api/sessions` - The caller's active sessions:
+  `[{ id, current, device, createdAt, lastUsedAt, expiresAt }]`, `device` such as
+  `"iPhone · Safari"`; the current one first, then by `lastUsedAt`
+- `DELETE /api/sessions/:id` - Sign that session out (204); the current one clears
+  the cookie too. Anybody else's id, or a malformed one, is a 404
+- `POST /api/sessions/revoke-others` - Sign out every session but the current one:
+  `{ revoked: <count> }`; 409 for an access token that names no session
 
 ### Me
 - `GET /api/me` - The caller, in the same shape as signin

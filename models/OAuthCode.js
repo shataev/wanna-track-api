@@ -32,6 +32,12 @@ const OAuthCodeSchema = new mongoose.Schema(
       type: String,
       required: true
     },
+    // Whether the authorization request named the redirect URI (rather than the client's only registered one);
+    // then the token request must name it too
+    redirectUriSent: {
+      type: Boolean,
+      default: false
+    },
     codeChallenge: {
       type: String,
       required: true

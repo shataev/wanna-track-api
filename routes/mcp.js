@@ -7,14 +7,25 @@ const { createMcpServer } = require('../services/mcpServer');
 // acting as the user of the OAuth access token
 const router = express.Router();
 
-router.all('/mcp', express.json({ limit: '1mb' }), authenticateMcp, async (req, res) => {
+const MAX_BODY = '256kb';
+
+const jsonRpcError = (res, status, code, message) => res.status(status).json({ jsonrpc: '2.0', error: { code, message }, id: null });
+
+// The body is read only once the bearer token is valid
+const parseBody = (req, res, next) => express.json({ limit: MAX_BODY })(req, res, (error) => {
+    if (error) {
+        return error.type === 'entity.too.large'
+            ? jsonRpcError(res, 413, -32600, `The request must not be larger than ${MAX_BODY}`)
+            : jsonRpcError(res, 400, -32700, 'Parse error');
+    }
+
+    next();
+});
+
+router.all('/mcp', authenticateMcp, parseBody, async (req, res) => {
     // Stateless: there is no session to stream to or to end
     if (req.method !== 'POST') {
-        return res.status(405).set('Allow', 'POST').json({
-            jsonrpc: '2.0',
-            error: { code: -32000, message: 'Method not allowed.' },
-            id: null
-        });
+        return jsonRpcError(res.set('Allow', 'POST'), 405, -32000, 'Method not allowed.');
     }
 
     const server = createMcpServer(req.user, req.auth.scopes);
@@ -32,11 +43,7 @@ router.all('/mcp', express.json({ limit: '1mb' }), authenticateMcp, async (req, 
         console.error('[mcp] error', error);
 
         if (!res.headersSent) {
-            res.status(500).json({
-                jsonrpc: '2.0',
-                error: { code: -32603, message: 'Internal server error' },
-                id: null
-            });
+            jsonRpcError(res, 500, -32603, 'Internal server error');
         }
     }
 });

@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 
 // A client registered through OAuth dynamic client registration (RFC 7591). Public clients only:
-// there is never a client secret
+// there is never a client secret. Only the fields the server needs are kept, whatever the client sent
 const OAuthClientSchema = new mongoose.Schema(
   {
     clientId: {
@@ -17,15 +17,23 @@ const OAuthClientSchema = new mongoose.Schema(
       type: [String],
       required: true
     },
-    // The registration as returned to the client, handed back to the SDK's handlers as is
-    metadata: {
-      type: Object,
+    clientIdIssuedAt: {
+      type: Number,
       required: true
+    },
+    // When a client nobody has allowed yet is deleted, so registrations nobody completes do not pile up;
+    // null once a user allows the client
+    pendingUntil: {
+      type: Date,
+      default: null
     }
   },
   {
     timestamps: true
   }
 );
+
+// MongoDB deletes a client nobody granted access to once pendingUntil has passed
+OAuthClientSchema.index({ pendingUntil: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.model('OAuthClient', OAuthClientSchema);

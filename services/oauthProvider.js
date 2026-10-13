@@ -8,6 +8,7 @@ const {
     AccessDeniedError,
     CustomOAuthError,
     InvalidGrantError,
+    InvalidRequestError,
     InvalidScopeError,
     InvalidTargetError,
     InvalidTokenError
@@ -25,7 +26,9 @@ const {
     ACCESS_TOKEN_TTL_SECONDS,
     REFRESH_TOKEN_TTL_SECONDS,
     AUTHORIZATION_CODE_TTL_SECONDS,
-    CONSENT_TTL_SECONDS
+    CONSENT_TTL_SECONDS,
+    PENDING_CLIENT_TTL_SECONDS,
+    GRANT_IDLE_TTL_SECONDS
 } = require('../utils/oauth.config');
 
 /**
@@ -63,7 +66,30 @@ const revokeGrant = async (grantId) => {
     await OAuthToken.updateMany({ grant: grantId, revokedAt: null }, { revokedAt: now });
 };
 
-const isActiveGrant = (grant) => Boolean(grant) && grant.revokedAt === null;
+// Grants nobody used (or, never used, created) since this moment have expired
+const idleCutoff = () => new Date(Date.now() - GRANT_IDLE_TTL_SECONDS * 1000);
+
+// The query for the grants that still work: not revoked, used (or created) within the idle limit
+const activeGrantFilter = () => ({
+    revokedAt: null,
+    $or: [
+        { lastUsedAt: { $gte: idleCutoff() } },
+        { lastUsedAt: null, createdAt: { $gte: idleCutoff() } }
+    ]
+});
+
+const isActiveGrant = (grant) => Boolean(grant)
+    && grant.revokedAt === null
+    && (grant.lastUsedAt ?? grant.createdAt) >= idleCutoff();
+
+// Record that a grant was used, at most once a minute
+const touchGrant = async (grant) => {
+    const now = Date.now();
+
+    if (!grant.lastUsedAt || now - grant.lastUsedAt.getTime() >= LAST_USED_RESOLUTION_MS) {
+        await OAuthGrant.updateOne({ _id: grant._id }, { lastUsedAt: new Date(now) });
+    }
+};
 
 // ---------- Clients (dynamic client registration) ----------
 
@@ -73,12 +99,16 @@ const clientsStore = {
             return undefined;
         }
 
-        const client = await OAuthClient.findOne({ clientId });
+        // A client past its pending time is gone, even before MongoDB's TTL monitor deletes it
+        const client = await OAuthClient.findOne({
+            clientId,
+            $or: [{ pendingUntil: null }, { pendingUntil: { $gt: new Date() } }]
+        });
 
-        return client ? client.metadata : undefined;
+        return client ? toClientInformation(client) : undefined;
     },
 
-    // Public clients only, and only with the redirect URIs of the Claude apps
+    // Public clients only, and only with the redirect URIs of the Claude apps. Nothing else the client sent is kept
     async registerClient(client) {
         const redirectUris = client.redirect_uris ?? [];
 
@@ -86,35 +116,45 @@ const clientsStore = {
             throw new CustomOAuthError('invalid_redirect_uri', 'Only the redirect URIs of the Claude apps can be registered');
         }
 
-        const { client_secret, client_secret_expires_at, ...rest } = client;
-
-        const metadata = {
-            ...rest,
-            client_name: sanitizeClientName(client.client_name) ?? undefined,
-            redirect_uris: redirectUris,
-            token_endpoint_auth_method: 'none',
-            grant_types: ['authorization_code', 'refresh_token'],
-            response_types: ['code']
-        };
-
-        await OAuthClient.create({
-            clientId: metadata.client_id,
-            clientName: metadata.client_name ?? null,
+        const stored = await OAuthClient.create({
+            clientId: client.client_id,
+            clientIdIssuedAt: client.client_id_issued_at,
+            clientName: sanitizeClientName(client.client_name),
             redirectUris,
-            metadata
+            pendingUntil: secondsFromNow(PENDING_CLIENT_TTL_SECONDS)
         });
 
-        return metadata;
+        return toClientInformation(stored);
     }
 };
 
+// What the SDK's handlers and the client see of a registration
+function toClientInformation(client) {
+    return {
+        client_id: client.clientId,
+        client_id_issued_at: client.clientIdIssuedAt,
+        ...(client.clientName ? { client_name: client.clientName } : {}),
+        redirect_uris: client.redirectUris,
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code']
+    };
+}
+
+// How many registered clients nobody has allowed yet; capped, whoever registers them
+const countPendingClients = () => OAuthClient.countDocuments({ pendingUntil: { $gt: new Date() } });
+
 // ---------- Authorization (the sign-in and consent pages) ----------
 
-const sendPage = (res, status, html) => {
+// Forms post only back to this page. The consent form is answered with a redirect to the client, and browsers
+// apply form-action to that redirect too, so the consent page also allows the redirect URI's origin
+const sendPage = (res, status, html, redirectOrigin = null) => {
+    const formAction = redirectOrigin ? `form-action 'self' ${redirectOrigin}` : "form-action 'self'";
+
     res.status(status)
         .set('Content-Type', 'text/html; charset=utf-8')
         .set('X-Frame-Options', 'DENY')
-        .set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
+        .set('Content-Security-Policy', `default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; ${formAction}`)
         .send(html);
 };
 
@@ -181,7 +221,7 @@ const handleSignIn = async (client, params, req, res) => {
         isLoopback: redirectUrl.protocol === 'http:',
         offerWrite,
         username: toAuthUser(user).username
-    }));
+    }), redirectUrl.origin);
 };
 
 const handleConsent = async (client, params, req, res) => {
@@ -207,12 +247,15 @@ const handleConsent = async (client, params, req, res) => {
         scopes.push(SCOPE_WRITE);
     }
 
-    // One active grant per user and client: connecting again replaces what was allowed before
-    const previous = await OAuthGrant.find({ user: consent.user, clientId: client.client_id, revokedAt: null });
-
-    for (const grant of previous) {
+    // Connecting the same app again replaces what was allowed before. With DCR every connection is a new
+    // client, so "the same app" is the same client or one with the same name and the same redirect URIs:
+    // claude.ai (web, mobile) and Claude Code differ by redirect URIs and keep their own grants
+    for (const grant of await findGrantsReplacedBy(consent.user, client)) {
         await revokeGrant(grant._id);
     }
+
+    // Allowed: the client stays registered
+    await OAuthClient.updateOne({ clientId: client.client_id }, { pendingUntil: null });
 
     const grant = await OAuthGrant.create({
         user: consent.user,
@@ -228,6 +271,8 @@ const handleConsent = async (client, params, req, res) => {
         hash: hashSecret(code),
         user: consent.user,
         ...requestBinding(client, params),
+        // The form carries the authorization request as it came, so this says whether it named a redirect URI
+        redirectUriSent: typeof req.body.redirect_uri === 'string',
         scopes: consent.scopes.includes(SCOPE_OFFLINE) ? [...scopes, SCOPE_OFFLINE] : scopes,
         grant: grant._id,
         expiresAt: secondsFromNow(AUTHORIZATION_CODE_TTL_SECONDS)
@@ -242,6 +287,25 @@ const handleConsent = async (client, params, req, res) => {
     }
 
     res.redirect(302, redirect.href);
+};
+
+const sameRedirectUris = (a, b) => a.length === b.length && [...a].sort().every((uri, index) => uri === [...b].sort()[index]);
+
+// The user's active grants that a new grant for `client` replaces
+const findGrantsReplacedBy = async (userId, client) => {
+    const grants = await OAuthGrant.find({ user: userId, revokedAt: null });
+    const clients = await OAuthClient.find({ clientId: { $in: grants.map(grant => grant.clientId) } });
+    const name = sanitizeClientName(client.client_name);
+
+    return grants.filter(grant => {
+        if (grant.clientId === client.client_id) {
+            return true;
+        }
+
+        const other = clients.find(item => item.clientId === grant.clientId);
+
+        return Boolean(other) && other.clientName === name && sameRedirectUris(other.redirectUris, client.redirect_uris);
+    });
 };
 
 // ---------- Tokens ----------
@@ -354,6 +418,11 @@ const provider = {
             throw new InvalidGrantError('Invalid authorization code');
         }
 
+        // RFC 6749 4.1.3: required when the authorization request had one, and then identical
+        if (stored.redirectUriSent && redirectUri === undefined) {
+            throw new InvalidRequestError('redirect_uri is required: the authorization request had one');
+        }
+
         if (redirectUri !== undefined && redirectUri !== stored.redirectUri) {
             throw new InvalidGrantError('redirect_uri does not match the authorization request');
         }
@@ -416,6 +485,8 @@ const provider = {
             throw new InvalidGrantError('Refresh token has already been used');
         }
 
+        await touchGrant(grant);
+
         return issueTokens(grant, granted);
     },
 
@@ -438,11 +509,7 @@ const provider = {
             throw new InvalidTokenError('The access was revoked');
         }
 
-        const now = Date.now();
-
-        if (!grant.lastUsedAt || now - grant.lastUsedAt.getTime() >= LAST_USED_RESOLUTION_MS) {
-            await OAuthGrant.updateOne({ _id: grant._id }, { lastUsedAt: new Date(now) });
-        }
+        await touchGrant(grant);
 
         return {
             token,
@@ -473,7 +540,7 @@ const provider = {
 // ---------- Grants, for the web app ----------
 
 const listGrants = async (userId) => {
-    const grants = await OAuthGrant.find({ user: userId, revokedAt: null }).sort({ createdAt: -1, _id: -1 });
+    const grants = await OAuthGrant.find({ user: userId, ...activeGrantFilter() }).sort({ createdAt: -1, _id: -1 });
 
     return grants.map(grant => ({
         id: String(grant._id),
@@ -488,7 +555,7 @@ const listGrants = async (userId) => {
 // Revoke one of the user's active grants; false when there is none with this id
 const revokeUserGrant = async (userId, id) => {
     const grantId = parseObjectId(id);
-    const grant = grantId && await OAuthGrant.findOne({ _id: grantId, user: userId, revokedAt: null });
+    const grant = grantId && await OAuthGrant.findOne({ _id: grantId, user: userId, ...activeGrantFilter() });
 
     if (!grant) {
         return false;
@@ -501,6 +568,7 @@ const revokeUserGrant = async (userId, id) => {
 
 module.exports = {
     provider,
+    countPendingClients,
     listGrants,
     revokeUserGrant,
     hashSecret

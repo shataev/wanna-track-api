@@ -518,7 +518,29 @@ describe('token endpoint', () => {
             .post('/oauth/token')
             .set('X-Forwarded-For', nextIp())
             .type('form')
-            .send(`grant_type=authorization_code&client_id=${encodeURIComponent(client.client_id)}&code=${encodeURIComponent(code)}&code_verifier=${encodeURIComponent(pkce.verifier)}`);
+            .send(`grant_type=authorization_code&client_id=${encodeURIComponent(client.client_id)}&code=${encodeURIComponent(code)}&code_verifier=${encodeURIComponent(pkce.verifier)}&redirect_uri=${encodeURIComponent(params.redirect_uri)}`);
+
+        expect(res.status).toBe(200);
+    });
+
+    test('redirect_uri sent at authorize: the token request must send it too', async () => {
+        const res = await exchange({ redirect_uri: undefined });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('invalid_request');
+        expect(await OAuthToken.countDocuments()).toBe(0);
+    });
+
+    test('redirect_uri not sent at authorize (the only registered one is used): optional at the token request', async () => {
+        const implicit = authorizationParams(client, pkce);
+
+        delete implicit.redirect_uri;
+
+        const signedIn = await signIn(implicit, { email: a.email });
+        const approved = await consent(implicit, nonceFrom(signedIn.text));
+        const implicitCode = new URL(approved.headers.location).searchParams.get('code');
+
+        const res = await exchange({ code: implicitCode, redirect_uri: undefined });
 
         expect(res.status).toBe(200);
     });
@@ -751,6 +773,14 @@ describe('revocation (RFC 7009)', () => {
 
     test('an unknown token is not an error', async () => {
         expect((await revoke('made-up')).status).toBe(200);
+    });
+
+    test('an unknown client is 401 invalid_client and revokes nothing', async () => {
+        const res = await revoke(connected.tokens.access_token, 'unknown-client');
+
+        expect(res.status).toBe(401);
+        expect(res.body.error).toBe('invalid_client');
+        expect((await mcp(oauthBearer(connected.tokens.access_token))).status).toBe(200);
     });
 
     test('another client cannot revoke the token', async () => {

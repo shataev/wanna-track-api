@@ -47,10 +47,26 @@ const isAllowedRedirectUri = (value) => {
         && value === `http://${url.host}/callback`;
 };
 
+// Claude's hosted apps register and call from Anthropic's egress range, shared by every claude.ai user,
+// so a per-IP limit there would let anyone's connector use up the owner's budget
+const isAnthropicIp = (ip) => {
+    const match = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip ?? ''));
+
+    // 160.79.104.0/21: 160.79.104.0 to 160.79.111.255
+    return Boolean(match) && match[1] === '160' && match[2] === '79' && Number(match[3]) >= 104 && Number(match[3]) <= 111;
+};
+
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60;
 const CONSENT_TTL_SECONDS = 10 * 60;
+// A registered client nobody allowed within a day is deleted
+const PENDING_CLIENT_TTL_SECONDS = 24 * 60 * 60;
+// At most this many such clients at a time, whoever registers them
+const MAX_PENDING_CLIENTS = 200;
+// A grant nobody used for this long stops working and leaves the list
+const GRANT_IDLE_TTL_SECONDS = 60 * 24 * 60 * 60;
+const MAX_REGISTRATION_BODY = '16kb';
 
 module.exports = {
     PUBLIC_URL,
@@ -62,8 +78,13 @@ module.exports = {
     SCOPE_OFFLINE,
     SCOPES_SUPPORTED,
     isAllowedRedirectUri,
+    isAnthropicIp,
     ACCESS_TOKEN_TTL_SECONDS,
     REFRESH_TOKEN_TTL_SECONDS,
     AUTHORIZATION_CODE_TTL_SECONDS,
-    CONSENT_TTL_SECONDS
+    CONSENT_TTL_SECONDS,
+    PENDING_CLIENT_TTL_SECONDS,
+    MAX_PENDING_CLIENTS,
+    GRANT_IDLE_TTL_SECONDS,
+    MAX_REGISTRATION_BODY
 };

@@ -10,7 +10,9 @@ const { seedUser, cookieFor, bearer, TEST_PASSWORD } = require('./helpers');
 
 const FULL_USER_KEYS = ['id', 'username', 'email', 'defaultCurrency', 'telegramId', 'verified', 'activeTag'];
 
-const refreshCookieOf = (res) => (res.headers['set-cookie'] || []).find(cookie => cookie.startsWith('refreshToken='));
+// The cookie that carries a session secret; the one clearing the cookie of before sessions is left out
+const refreshCookieOf = (res) => (res.headers['set-cookie'] || [])
+    .find(cookie => cookie.startsWith('refreshToken=') && !cookie.startsWith('refreshToken=;'));
 
 const expectFullUser = (body, user) => {
     expect(Object.keys(body)).toEqual(expect.arrayContaining(FULL_USER_KEYS));

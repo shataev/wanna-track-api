@@ -459,6 +459,13 @@ describe('token endpoint', () => {
         expect((await mcp(oauthBearer(first.body.access_token))).status).toBe(401);
     });
 
+    test('two simultaneous exchanges of one code: exactly one gets tokens', async () => {
+        const results = await Promise.all([exchange(), exchange(), exchange()]);
+
+        expect(results.filter(res => res.status === 200)).toHaveLength(1);
+        expect(await OAuthToken.countDocuments({ kind: 'access' })).toBeLessThanOrEqual(1);
+    });
+
     test('an expired code is refused', async () => {
         await OAuthCode.updateMany({ kind: 'code' }, { expiresAt: new Date(Date.now() - 1000) });
 
@@ -611,6 +618,14 @@ describe('/mcp accepts only OAuth access tokens', () => {
 
         expect(res.status).toBe(401);
         expect(res.headers['www-authenticate']).toContain(`resource_metadata="${PRM_URL}"`);
+    });
+
+    test('a revoked grant: its access token is refused even if the token itself was not marked', async () => {
+        const { tokens } = await connect(a);
+
+        await OAuthGrant.updateMany({}, { revokedAt: new Date() });
+
+        expect((await mcp(oauthBearer(tokens.access_token))).status).toBe(401);
     });
 
     test('a made-up token: 401', async () => {

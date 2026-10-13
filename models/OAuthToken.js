@@ -57,4 +57,7 @@ const OAuthTokenSchema = new mongoose.Schema(
   }
 );
 
+// MongoDB removes a day after expiry what can no longer be used
+OAuthTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 24 * 60 * 60 });
+
 module.exports = mongoose.model('OAuthToken', OAuthTokenSchema);

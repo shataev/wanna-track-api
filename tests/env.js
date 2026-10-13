@@ -7,3 +7,9 @@ process.env.TELEGRAM_BOT_USERNAME = 'test_bot';
 process.env.CLIENT_URL = 'http://client.test';
 delete process.env.AUTH_ENFORCE;
 delete process.env.ADMIN_SECRET;
+
+// Node 18 has a global WebCrypto, but jest's node environment does not pass it into the test sandbox there;
+// the SDK's PKCE check needs it. Real Node 18 processes have it (Node 20+ sandboxes do too)
+if (!globalThis.crypto) {
+    globalThis.crypto = require('crypto').webcrypto;
+}

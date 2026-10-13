@@ -147,7 +147,10 @@ Claude may add expenses.
 - `GET /.well-known/oauth-protected-resource[/mcp]`, `GET /.well-known/oauth-authorization-server` - Discovery
 - `POST /oauth/register` - Dynamic client registration; public clients only, and only
   with `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`
-  or `http://localhost|127.0.0.1:<any port>/callback`
+  or `http://localhost|127.0.0.1:<any port>/callback`. Body at most 16 KB; only the id, the
+  name (100 characters) and the redirect URIs are kept. A client nobody allows within 24
+  hours is deleted, at most 200 such clients exist at a time (then 429), and addresses
+  outside Anthropic's `160.79.104.0/21` may register 100 an hour
 - `GET/POST /oauth/authorize` - Sign in (10 failed attempts per IP or email in 15
   minutes lock the form) and consent; PKCE S256 required
 - `POST /oauth/token` - Form-encoded `authorization_code` and `refresh_token` grants.
@@ -155,7 +158,9 @@ Claude may add expenses.
   a new one, and presenting a used one revokes the whole grant
 - `POST /oauth/revoke` - RFC 7009
 - `GET /api/oauth/grants`, `DELETE /api/oauth/grants/:id` - The caller's connected apps
-  and disconnecting one (all its tokens stop working); bearer JWT
+  and disconnecting one (all its tokens stop working); bearer JWT. Allowing an app again
+  replaces the user's grant of the same app (same name and redirect URIs, so claude.ai and
+  Claude Code stay apart); a grant unused for 60 days expires and leaves the list
 
 `PUBLIC_API_URL` (default `https://api.wannatrack.shataev.com`) sets the issuer and the
 resource URL for a local run.

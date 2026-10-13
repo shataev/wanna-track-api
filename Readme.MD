@@ -55,8 +55,9 @@ Every web sign-in is a session in the database. The `refreshToken` cookie
 (`httpOnly`, `secure`, `sameSite=lax`, path `/api/auth`, so data routes never see
 it) holds a random secret; only its sha256 is stored. Every refresh replaces the
 secret and moves the session's end to 90 days later, never past 180 days after
-sign-in. The secret just replaced still works for 30 seconds (two tabs refreshing
-at once), without a new cookie; after that, presenting it revokes the session.
+sign-in. The secret just replaced still works for 5 minutes (two tabs refreshing
+at once, or a phone retrying after a lost response), without a new cookie; after
+that, presenting it revokes the session.
 The access token lives 15 minutes and names its session (`sid`).
 
 A refresh JWT cookie from before sessions (path `/`) becomes a session on its

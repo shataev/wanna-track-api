@@ -162,7 +162,7 @@ describe('POST /api/auth/refresh', () => {
         expect((await refresh(second)).status).toBe(200);
     });
 
-    it('accepts the replaced secret within 30 seconds: same session, no new cookie, nothing revoked', async () => {
+    it('accepts the replaced secret within the grace window: same session, no new cookie, nothing revoked', async () => {
         useFakeDate();
         const user = await seedUser();
         const first = secretOf(await signIn(user));
@@ -194,7 +194,7 @@ describe('POST /api/auth/refresh', () => {
         expect(await Session.countDocuments({ revokedAt: null })).toBe(1);
     });
 
-    it('revokes the whole session when the replaced secret comes back after 30 seconds', async () => {
+    it('revokes the whole session when the replaced secret comes back after the grace window', async () => {
         useFakeDate();
         const user = await seedUser();
         const first = secretOf(await signIn(user));

@@ -9,8 +9,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SLIDING_LIFETIME_MS = 90 * DAY_MS;
 const ABSOLUTE_LIFETIME_MS = 180 * DAY_MS;
 
-// Two tabs refreshing at once both send the same secret: the one that loses the race still gets in
-const ROTATION_GRACE_MS = 30 * 1000;
+// The secret just replaced still gets in for a while: two tabs refreshing at once send the same one, and a
+// phone on a bad connection can lose the refresh response and retry minutes later with the old secret
+const ROTATION_GRACE_MS = 5 * 60 * 1000;
 
 const USER_AGENT_MAX_LENGTH = 200;
 

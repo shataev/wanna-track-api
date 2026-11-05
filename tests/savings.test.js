@@ -304,15 +304,14 @@ describe('the total', () => {
     });
 
     it('the sum is exact even when each part rounds on its own', async () => {
-        // 1 THB-cent balances in odd currencies make the parts and the whole round differently
-        await seedFund(user, { name: 'A', currency: 'JPY', currentBalance: 1.01 });
-        await seedFund(user, { name: 'B', currency: 'JPY', currentBalance: 1.01, kind: 'savings' });
-        await seedFund(user, { name: 'C', currency: 'USD', currentBalance: 0.01 });
-        await seedFund(user, { name: 'D', currency: 'USD', currentBalance: 0.01, kind: 'savings' });
+        // 0.004 + 0.004: each part rounds to 0.00, the whole to 0.01
+        await seedFund(user, { name: 'A', currency: 'THB', currentBalance: 0.004 });
+        await seedFund(user, { name: 'B', currency: 'THB', currentBalance: 0.004, kind: 'savings' });
 
         const total = await totalOf();
 
-        expect(Math.round((total.available + total.saved) * 100)).toBe(Math.round(total.amount * 100));
+        expect(total.amount).toBe(0.01);
+        expect(Math.round((total.available + total.saved) * 100)).toBe(1);
     });
 
     it('leaves archived savings out of both parts', async () => {

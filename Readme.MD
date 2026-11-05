@@ -110,8 +110,8 @@ not rejected.
 - `GET /api/funds` - The active funds and their `total` (archived funds are left out of both).
   `?archived=true` returns only the archived funds, newest archived first, without a total; web only,
   the bot gets 403
-- `POST /api/funds` - Create a new fund
-- `PUT /api/funds/:id` - Update a fund (400 for `isDefault: true` on an archived one)
+- `POST /api/funds` - Create a new fund; takes `kind` and `goal` (below)
+- `PUT /api/funds/:id` - Update a fund (400 for `isDefault: true` on an archived one); takes `kind` and `goal`
 - `POST /api/funds/:id/archive` - Archive a fund with any balance: it leaves the list and the total, keeps its
   history and cannot take new expenses or transfers (400); an archived default fund stops being the default.
   Returns the fund; archiving twice changes nothing. Web only
@@ -122,6 +122,17 @@ not rejected.
 - `GET /api/funds/:id/transactions` - Get fund transactions (also of an archived fund)
 - `GET /api/funds/total` - Total of the active funds in the caller's default currency
 - `POST /api/funds/transfer` - Transfer money between funds (400 when either is archived)
+
+Savings: a fund has a `kind`, `account` (default; funds saved before have none and read as accounts) or `savings`,
+a separate real balance. A savings fund may have a `goal: { amount, date }` (amount > 0 in the fund's currency,
+`date` optional; `goal: null` clears it); a goal on an account, a bad kind, amount or date, and `isDefault: true`
+on a savings fund are 400. Making a fund savings clears `isDefault`; turning it back into an account clears the goal.
+Every fund in `GET /api/funds`, `?archived=true` and `GET /api/funds/:id` carries `kind`, `goal` and, with a goal,
+`goalProgress: { percent, remaining, monthsLeft, perMonth, reached }` (`monthsLeft` counts Asia/Bangkok calendar
+months from the current one to the target date's month, at least 1 — a past date gives 1; `perMonth` is
+`remaining / monthsLeft` rounded up; both are null without a date). The `total` of `GET /api/funds` and
+`GET /api/funds/total` also carry `available` (accounts) and `saved` (savings); `amount` is exactly their sum.
+Savings are put aside with a transfer and may be spent from; budgets and analytics ignore the kind.
 
 An expense already on an archived fund can still be edited and deleted there (the refund goes back to the
 fund); `POST /api/cost` and moving an expense onto an archived fund answer 400.

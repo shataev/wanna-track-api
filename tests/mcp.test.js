@@ -182,7 +182,7 @@ describe('read tools', () => {
             ['Card', 'THB', 100],
             ['Cash', 'THB', 5000 - 120 - 40 - 365]
         ]);
-        expect(data.total).toEqual({ amount: 100 + 5000 - 120 - 40 - 365, currency: 'THB' });
+        expect(data.total).toEqual({ amount: 100 + 5000 - 120 - 40 - 365, available: 100 + 5000 - 120 - 40 - 365, saved: 0, currency: 'THB' });
     });
 
     test('list_tags: as GET /api/tags', async () => {
@@ -527,7 +527,7 @@ describe('archived funds', () => {
 
         expect(data.funds.map(fund => fund.name)).toEqual(['Cash']);
         expect(data.funds[0].archived).toBeUndefined();
-        expect(data.total).toEqual({ amount: 5000 - 120 - 40 - 365, currency: 'THB' });
+        expect(data.total).toEqual({ amount: 5000 - 120 - 40 - 365, available: 5000 - 120 - 40 - 365, saved: 0, currency: 'THB' });
 
         const all = (await call(client, 'list_funds', { includeArchived: true })).data;
 

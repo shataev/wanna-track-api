@@ -4,7 +4,7 @@ const FundTransaction = require('../models/FundTransaction');
 const Cost = require('../models/Cost');
 const { authenticate, authenticateUserOrBot } = require('../middlewares/authenticate');
 const { getRatesObject } = require('../services/exchangeRateService');
-const { calculateTotalFundsAmount, findOwnedFund, isArchived } = require('../utils/fund.utils');
+const { FUND_KINDS, parseGoal, serializeFund, calculateTotalFundsAmount, findOwnedFund, isArchived } = require('../utils/fund.utils');
 const { getConversionRate, roundToCurrencyPrecision } = require('../utils/currency.utils');
 const { parseObjectId } = require('../utils/id.utils');
 
@@ -21,7 +21,7 @@ router.get('/funds', authenticateUserOrBot, async (req, res) => {
 
             const archivedFunds = await Fund.find({ userId, archivedAt: { $ne: null } }).sort({ archivedAt: -1 });
 
-            return res.status(200).json({ funds: archivedFunds });
+            return res.status(200).json({ funds: archivedFunds.map(fund => serializeFund(fund)) });
         }
 
         const funds = await Fund.find({ userId, archivedAt: null });
@@ -35,9 +35,11 @@ router.get('/funds', authenticateUserOrBot, async (req, res) => {
         res
             .status(200)
             .json({
-                funds,
+                funds: funds.map(fund => serializeFund(fund)),
                 total: totalFunds ? {
                     amount: totalFunds.total,
+                    available: totalFunds.available,
+                    saved: totalFunds.saved,
                     currency: totalFunds.baseCurrency,
                     fundsCount: totalFunds.fundsCount
                 } : null
@@ -60,11 +62,39 @@ router.post('/funds', authenticate, async (req, res) => {
         description,
         initialBalance,
         isDefault,
-        currency
+        currency,
+        kind = 'account',
+        goal
     } = req.body;
 
     try {
+        if (!FUND_KINDS.includes(kind)) {
+            return res.status(400).json({error: 'Kind must be account or savings'});
+        }
+
+        let parsedGoal = null;
+
+        if (goal !== undefined) {
+            const parsed = parseGoal(goal);
+
+            if (parsed.error) {
+                return res.status(400).json({error: parsed.error});
+            }
+
+            parsedGoal = parsed.value;
+        }
+
+        if (kind !== 'savings' && parsedGoal) {
+            return res.status(400).json({error: 'Only a savings fund can have a goal'});
+        }
+
+        if (kind === 'savings' && isDefault) {
+            return res.status(400).json({error: 'A savings fund cannot be the default'});
+        }
+
         const newFund = new Fund({
+            kind,
+            goal: parsedGoal,
             name,
             icon,
             description,
@@ -79,7 +109,7 @@ router.post('/funds', authenticate, async (req, res) => {
 
         res
             .status(201)
-            .json(fund);
+            .json(serializeFund(fund));
     } catch (error) {
         console.log(error)
         res
@@ -91,7 +121,7 @@ router.post('/funds', authenticate, async (req, res) => {
 // Update fund
 router.put('/funds/:id', authenticate, async (req, res) => {
     const {id} = req.params;
-    const {name, description, currentBalance, icon, isDefault, currency} = req.body;
+    const {name, description, currentBalance, icon, isDefault, currency, kind, goal} = req.body;
 
     try {
         const oldFund = await findOwnedFund(id, req.user.id);
@@ -104,9 +134,46 @@ router.put('/funds/:id', authenticate, async (req, res) => {
             return res.status(400).json({error: 'Fund is archived'});
         }
 
+        if (kind !== undefined && !FUND_KINDS.includes(kind)) {
+            return res.status(400).json({error: 'Kind must be account or savings'});
+        }
+
+        const newKind = kind ?? oldFund.kind ?? 'account';
+        const update = {name, description, currentBalance, icon, isDefault, currency};
+
+        if (goal !== undefined) {
+            const parsed = parseGoal(goal);
+
+            if (parsed.error) {
+                return res.status(400).json({error: parsed.error});
+            }
+
+            if (newKind !== 'savings' && parsed.value) {
+                return res.status(400).json({error: 'Only a savings fund can have a goal'});
+            }
+
+            update.goal = parsed.value;
+        }
+
+        if (newKind === 'savings' && isDefault) {
+            return res.status(400).json({error: 'A savings fund cannot be the default'});
+        }
+
+        if (kind !== undefined) {
+            update.kind = kind;
+        }
+
+        if (newKind === 'savings') {
+            // Becoming savings drops the default flag
+            update.isDefault = false;
+        } else if (goal === undefined) {
+            // An account has no goal: turning a savings fund back into one clears it
+            update.goal = null;
+        }
+
         const fund = await Fund.findOneAndUpdate(
             {_id: oldFund._id, userId: req.user.id},
-            {name, description, currentBalance, icon, isDefault, currency},
+            update,
             {new: true}
         );
 
@@ -124,7 +191,7 @@ router.put('/funds/:id', authenticate, async (req, res) => {
         });
         await adjustment.save();
 
-        res.status(200).json(fund);
+        res.status(200).json(serializeFund(fund));
     } catch (error) {
         res.status(500).json({error: error.message});
     }
@@ -363,6 +430,7 @@ router.get('/funds/:id', authenticate, async (req, res) => {
             isDefault: fund.isDefault,
             currency: fund.currency,
             archivedAt: fund.archivedAt ?? null,
+            ...(({ kind, goal, goalProgress }) => ({ kind, goal, ...(goalProgress ? { goalProgress } : {}) }))(serializeFund(fund)),
         });
     } catch (error) {
         console.error('Get fund error:', error);

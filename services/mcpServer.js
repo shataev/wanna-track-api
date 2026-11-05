@@ -6,7 +6,7 @@ const { createCost, listCosts, listTags } = require('./costService');
 const { buildSummary, buildMonthly, BANGKOK_OFFSET_MS } = require('./analyticsService');
 const { listBudgets, setBudget, removeBudget, budgetForCost } = require('./budgetService');
 const { setActiveTag } = require('./userService');
-const { calculateTotalFundsAmount } = require('../utils/fund.utils');
+const { calculateTotalFundsAmount, goalProgress } = require('../utils/fund.utils');
 const { normalizeTag } = require('../utils/tag.utils');
 const { SCOPE_WRITE } = require('../utils/oauth.config');
 
@@ -23,7 +23,8 @@ const DATE_DESCRIPTION = 'ISO 8601. A bare date such as 2026-10-01 means midnigh
 const INSTRUCTIONS = `Wanna Track is the user's personal expense tracker.
 Every amount comes with its currency. "amountInUserCurrency" is converted to the user's default currency at the rate saved with the expense.
 ${TIMEZONE_NOTE}
-Funds are the user's accounts (cash, cards); an expense paid from a fund is debited from its balance, converted to the fund's currency.
+Funds are the user's accounts (cash, cards) and savings; an expense paid from a fund is debited from its balance, converted to the fund's currency.
+A fund has a kind: "account" (money to spend from) or "savings" (a separate real balance, such as a savings account for a trip). A savings fund may have a goal (amount in the fund's currency, optional date) with goalProgress (percent, remaining, monthsLeft, perMonth, reached). Spending from a savings fund is allowed; the total splits into available (accounts) and saved (savings).
 A fund the user no longer uses is archived: it is not listed by default (list_funds includeArchived shows it), is not in the total, and takes no new expenses, but its past expenses keep its name.
 Categories can have a monthly limit (budget) in the default currency: it never blocks an expense, going over is only shown. get_budgets shows spent, remaining and state (on_track, ahead of pace, over) per limit; set_budget sets or removes one.
 Call get_profile first to learn the default currency, the active tag and today's date.`;
@@ -61,6 +62,9 @@ const describeFund = (fund) => ({
     balance: fund.currentBalance,
     isDefault: Boolean(fund.isDefault),
     description: fund.description || null,
+    kind: fund.kind || 'account',
+    goal: fund.goal ? { amount: fund.goal.amount, date: fund.goal.date } : null,
+    ...(fund.goal ? { goalProgress: goalProgress(fund) } : {}),
     ...(fund.archivedAt ? { archived: true } : {})
 });
 
@@ -169,7 +173,7 @@ const registerReadTools = (server, user) => {
 
     server.registerTool('list_funds', {
         title: 'Funds',
-        description: 'The user\'s active funds (accounts such as cash or a card), each with its current balance in its own currency, and the total of their balances in the user\'s default currency. Archived funds (accounts the user no longer uses) are left out and do not count in the total; includeArchived adds them, marked archived: true.',
+        description: 'The user\'s active funds (accounts such as cash or a card, and savings), each with its kind, current balance in its own currency and, for savings with a goal, the goal and its progress, and the total of their balances in the user\'s default currency, split into available (accounts) and saved (savings). Archived funds (accounts the user no longer uses) are left out and do not count in the total; includeArchived adds them, marked archived: true.',
         inputSchema: {
             includeArchived: z.boolean().optional().describe('Also list archived funds, marked archived: true. Default false')
         },
@@ -181,7 +185,7 @@ const registerReadTools = (server, user) => {
         return json({
             currency: userCurrencyOf(user),
             funds: funds.map(describeFund),
-            total: total ? { amount: total.total, currency: total.baseCurrency } : null
+            total: total ? { amount: total.total, available: total.available, saved: total.saved, currency: total.baseCurrency } : null
         });
     });
 

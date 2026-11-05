@@ -2,11 +2,11 @@ const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const Cost = require('../models/Cost');
 const FundTransaction = require('../models/FundTransaction');
-const Category = require('../models/Category');
 const { getRatesObject } = require('./exchangeRateService');
 const { getConversionRate, roundToCurrencyPrecision } = require('../utils/currency.utils');
 const { findOwnedFund } = require('../utils/fund.utils');
 const { parseObjectId } = require('../utils/id.utils');
+const { isCategoryUsable } = require('../utils/category.utils');
 const { normalizeTags } = require('../utils/tag.utils');
 const { userCurrencyStages } = require('../utils/cost.utils');
 
@@ -141,12 +141,7 @@ const createCost = async (user, {
 
     // Either a global category (user: null) or one of the caller's own; checked before any money moves
     const categoryId = parseObjectId(category);
-    const isCategoryAllowed = categoryId && await Category.exists({
-        _id: categoryId,
-        user: { $in: [null, userId] }
-    });
-
-    if (!isCategoryAllowed) {
+    if (!await isCategoryUsable(userId, categoryId)) {
         return { status: 404, error: 'Category not found' };
     }
 

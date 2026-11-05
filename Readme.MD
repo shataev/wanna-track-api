@@ -139,6 +139,27 @@ currency/rate counts at rate 1).
   categories, for the last `months` (1–24) months including the current one, oldest
   first; a month without expenses has total 0. Months are counted in Asia/Bangkok
 
+### Budgets
+A monthly limit per category, in the caller's default currency when it was set. One
+limit applies to every month; there is no history and no rollover. A limit never blocks
+an expense: going over is shown, not prevented. A limit may be on a global category; it
+is still the caller's own. Spent is computed on read with the aggregation analytics uses
+(every expense of the category counts, converted, in the Asia/Bangkok calendar month).
+
+- `GET /api/budgets?month=YYYY-MM` - User and bot. `month` defaults to the current
+  Bangkok month, a malformed one is 400. `{ currency, month, dateFrom, dateTo,
+  daysInMonth, elapsedDays, pacePercent, budgets }`, each budget `{ id, category,
+  limit, currency, spent, remaining, percent, state, currencyMismatch }`, most used
+  first. `elapsedDays` counts today; all of a past month, none of a future one.
+  `state`: `over` when spent > limit; else `ahead` when `percent` is over
+  `pacePercent` + 10 or at least 80; else `on_track`. A limit set in another currency
+  than the current default one has `currencyMismatch: true` and `null` figures and state.
+- `PUT /api/budgets/:categoryId` `{ amount }` - User only. Create or replace; returns
+  the budget for the current month. Bad amount 400, a category the caller cannot use 404
+- `DELETE /api/budgets/:categoryId` - User only. 204, 404 when there is no limit
+- `POST /api/cost` also returns `budget`: the item above for the month of the expense's
+  date plus `month`, or `null` without a limit (or if the lookup failed: the expense is saved)
+
 ### Telegram
 - `GET /api/telegram/telegram-binding-link` - Link that binds the caller's Telegram account
 - `POST /api/telegram/telegram-unbind` - Unbind the caller's Telegram account
@@ -162,7 +183,8 @@ Claude may add expenses.
   `/oauth/token` is accepted (no JWT, no bot secret); without one: 401 with
   `WWW-Authenticate: Bearer resource_metadata=…, scope=…`. Tools: `get_profile`,
   `list_categories`, `list_funds`, `list_tags`, `list_expenses`, `get_summary`,
-  `get_monthly_trend` (scope `expenses.read`), and `add_expense`, `set_active_tag`
+  `get_budgets`, `get_monthly_trend` (scope `expenses.read`), and `add_expense`,
+  `set_active_tag`, `set_budget` (amount 0 or null removes the limit)
   (scope `expenses.write`, not even listed without it). They use the same services as
   the REST routes, so amounts and totals match the web app.
 - `GET /.well-known/oauth-protected-resource[/mcp]`, `GET /.well-known/oauth-authorization-server` - Discovery

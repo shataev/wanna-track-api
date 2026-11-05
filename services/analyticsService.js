@@ -279,4 +279,11 @@ const buildMonthly = async (user, query) => {
     };
 };
 
-module.exports = { BANGKOK_OFFSET_MS, buildSummary, buildMonthly };
+module.exports = {
+    BANGKOK_OFFSET_MS,
+    bangkokMonthKey,
+    bangkokMonthStart,
+    loadCosts,
+    buildSummary,
+    buildMonthly
+};

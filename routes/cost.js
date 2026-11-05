@@ -18,6 +18,7 @@ const {
     createCost,
     listTags
 } = require('../services/costService');
+const { budgetForCost } = require('../services/budgetService');
 
 // Get all user's costs
 router.get('/costs', authenticate, async (req, res) => {
@@ -156,9 +157,12 @@ router.post('/cost', authenticateUserOrBot, async (req, res) => {
             return res.status(result.status).json({ error: result.error });
         }
 
+        // The expense is saved: a failing budget lookup yields budget: null, never an error
+        const budget = await budgetForCost(req.user, result.cost);
+
         res
             .status(201)
-            .json(result.cost);
+            .json({ ...result.cost.toJSON(), budget });
     } catch (error) {
         console.log(error)
         res

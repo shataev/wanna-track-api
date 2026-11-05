@@ -2,6 +2,7 @@ const request = require('supertest');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 const app = require('../app');
+const Budget = require('../models/Budget');
 const Cost = require('../models/Cost');
 const ExchangeRate = require('../models/ExchangeRate');
 const Fund = require('../models/Fund');
@@ -16,8 +17,8 @@ const RATES = [['THB', 36.5], ['JPY', 149.3], ['EUR', 0.9]];
 // 1500 JPY debited from a THB fund, rounded to satang
 const RAMEN_IN_THB = 366.71;
 
-const READ_TOOLS = ['get_monthly_trend', 'get_profile', 'get_summary', 'list_categories', 'list_expenses', 'list_funds', 'list_tags'];
-const WRITE_TOOLS = ['add_expense', 'set_active_tag'];
+const READ_TOOLS = ['get_budgets', 'get_monthly_trend', 'get_profile', 'get_summary', 'list_categories', 'list_expenses', 'list_funds', 'list_tags'];
+const WRITE_TOOLS = ['add_expense', 'set_active_tag', 'set_budget'];
 
 // The MCP SDK's own client over HTTP against the real app, the way Claude talks to it
 let server;
@@ -429,13 +430,83 @@ describe('write tools', () => {
     });
 });
 
+describe('budgets', () => {
+    let client;
+
+    beforeEach(async () => {
+        client = await mcpClient((await connect(a.user, { allowWrite: true })).tokens.access_token);
+    });
+
+    test('set_budget sets, changes and removes a limit, by name or id; get_budgets reads it', async () => {
+        const set = await call(client, 'set_budget', { category: 'food', amount: 3000 });
+
+        expect(set.data).toMatchObject({ limit: 3000, currency: 'THB', category: { name: 'Food' } });
+
+        await call(client, 'set_budget', { category: String(a.food._id), amount: 4000 });
+        await call(client, 'set_budget', { category: 'Transport', amount: 500 });
+
+        const read = await call(client, 'get_budgets');
+
+        expect(read.data.currency).toBe('THB');
+        expect(read.data.budgets.map(item => [item.category.name, item.limit]).sort()).toEqual([['Food', 4000], ['Transport', 500]]);
+        expect(await Budget.countDocuments({ user: a.user._id })).toBe(2);
+
+        expect((await call(client, 'set_budget', { category: 'Food', amount: 0 })).data).toEqual({ removed: true });
+        expect((await call(client, 'set_budget', { category: 'Transport', amount: null })).data).toEqual({ removed: true });
+        expect((await call(client, 'set_budget', { category: 'Transport', amount: null })).data).toEqual({ removed: false });
+        expect(await Budget.countDocuments()).toBe(0);
+    });
+
+    test('set_budget: another user\'s category is unknown, a negative amount is refused', async () => {
+        const unknown = await call(client, 'set_budget', { category: 'B-secret-category', amount: 100 });
+
+        expect(unknown.result.isError).toBe(true);
+        expect(await callRefused(client, 'set_budget', { category: 'Food', amount: -1 })).toBe(true);
+        expect(await Budget.countDocuments()).toBe(0);
+    });
+
+    test('get_budgets takes a month and refuses a malformed one; it shows only the caller\'s limits', async () => {
+        await Budget.create({ user: b.user._id, category: b.food._id, amount: 777, currency: 'THB' });
+        await call(client, 'set_budget', { category: 'Food', amount: 1000 });
+
+        const past = await call(client, 'get_budgets', { month: '2026-09' });
+        const bad = await call(client, 'get_budgets', { month: 'September' });
+
+        expect(past.data).toMatchObject({ month: '2026-09' });
+        expect(past.data.budgets.map(item => item.limit)).toEqual([1000]);
+        expect(bad.result.isError).toBe(true);
+    });
+
+    test('get_budgets works with a read-only token', async () => {
+        await Budget.create({ user: a.user._id, category: a.food._id, amount: 1000, currency: 'THB' });
+
+        const readOnly = await mcpClient((await connect(a.user)).tokens.access_token);
+        const { data } = await call(readOnly, 'get_budgets');
+
+        expect(data.budgets).toHaveLength(1);
+    });
+
+    test('add_expense includes the budget line when the category has a limit, and nothing when it has none', async () => {
+        await call(client, 'set_budget', { category: 'Food', amount: 1000 });
+
+        const withLimit = await call(client, 'add_expense', { amount: 250, category: 'Food', fund: 'Cash', date: new Date().toISOString() });
+        const without = await call(client, 'add_expense', { amount: 50, category: 'Transport', fund: 'Cash' });
+
+        expect(withLimit.data.budget).toMatchObject({ limit: 1000, spent: 250, remaining: 750 });
+        expect(withLimit.data.budgetSummary).toBe('Food: 250 / 1000 THB · left 750');
+        expect(without.data).not.toHaveProperty('budget');
+    });
+});
+
 describe('a read-only token cannot write', () => {
     test('add_expense and set_active_tag are refused and nothing changes', async () => {
         const client = await mcpClient((await connect(a.user)).tokens.access_token);
 
         expect(await callRefused(client, 'add_expense', { amount: 50, category: 'Food', fund: 'Cash' })).toBe(true);
         expect(await callRefused(client, 'set_active_tag', { tag: 'x' })).toBe(true);
+        expect(await callRefused(client, 'set_budget', { category: 'Food', amount: 100 })).toBe(true);
 
+        expect(await Budget.countDocuments()).toBe(0);
         expect(await Cost.countDocuments()).toBe(0);
         expect((await Fund.findById(a.cash._id)).currentBalance).toBe(5000);
         expect((await User.findById(a.user._id)).activeTag).toBeNull();

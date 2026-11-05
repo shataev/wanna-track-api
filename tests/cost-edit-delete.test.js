@@ -52,6 +52,12 @@ const patchCost = (party, id, body, headers = bearer(party.user)) =>
 const deleteCost = (party, id, headers = bearer(party.user)) =>
     request(app).delete(`/api/cost/${id}`).set(headers);
 
+// How funds used to be deleted, history and all: the costs on such a fund are still in the data
+const hardDeleteFund = async (fund) => {
+    await Fund.deleteOne({ _id: fund._id });
+    await FundTransaction.deleteMany({ fundId: fund._id });
+};
+
 const balanceOf = async (fund) => (await Fund.findById(fund._id)).currentBalance;
 
 const historyOf = async (fund) => (await FundTransaction.find({ fundId: fund._id }).sort({ _id: 1 }))
@@ -125,7 +131,7 @@ describe('DELETE /api/cost/:id', () => {
 
     it('just deletes the cost when its fund was deleted since', async () => {
         const cost = await createCost(a);
-        await request(app).delete(`/api/funds/${a.card._id}`).set(bearer(a.user)).expect(200);
+        await hardDeleteFund(a.card);
 
         const res = await deleteCost(a, cost._id);
 
@@ -334,7 +340,7 @@ describe('PATCH /api/cost/:id moving money', () => {
 
     it('is 404 Fund not found for a change of amount on a fund deleted since; taking it off the fund works', async () => {
         const cost = await createCost(a);
-        await request(app).delete(`/api/funds/${a.card._id}`).set(bearer(a.user)).expect(200);
+        await hardDeleteFund(a.card);
 
         expect((await patchCost(a, cost._id, { amount: 150 })).status).toBe(404);
 

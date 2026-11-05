@@ -19,6 +19,8 @@ const FundSchema = new mongoose.Schema(
     initialBalance: { type: Number, required: true },
     currentBalance: { type: Number, required: true },
     isDefault: { type: Boolean, default: false },
+    // When the fund was archived; null (or missing, for funds saved before) means active
+    archivedAt: { type: Date, default: null },
     currency: {
       type: String,
       required: true,

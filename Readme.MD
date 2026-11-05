@@ -107,14 +107,24 @@ characters and 10 tags per cost, duplicates removed. A tag left empty is dropped
 not rejected.
 
 ### Funds
-- `GET /api/funds` - Get all funds
+- `GET /api/funds` - The active funds and their `total` (archived funds are left out of both).
+  `?archived=true` returns only the archived funds, newest archived first, without a total; web only,
+  the bot gets 403
 - `POST /api/funds` - Create a new fund
-- `PUT /api/funds/:id` - Update a fund
-- `DELETE /api/funds/:id` - Delete a fund
-- `GET /api/funds/:id` - Get fund details
-- `GET /api/funds/:id/transactions` - Get fund transactions
-- `GET /api/funds/total` - Total of all funds in the caller's default currency
-- `POST /api/funds/transfer` - Transfer money between funds
+- `PUT /api/funds/:id` - Update a fund (400 for `isDefault: true` on an archived one)
+- `POST /api/funds/:id/archive` - Archive a fund with any balance: it leaves the list and the total, keeps its
+  history and cannot take new expenses or transfers (400); an archived default fund stops being the default.
+  Returns the fund; archiving twice changes nothing. Web only
+- `POST /api/funds/:id/restore` - Bring an archived fund back; returns the fund. Web only
+- `DELETE /api/funds/:id` - Delete a fund that has no history (no cost on it, no transaction, which includes
+  adjustments); otherwise 409 `{ error, code: 'fund_has_history' }`, archive it instead
+- `GET /api/funds/:id` - Get fund details (also an archived fund, with `archivedAt`)
+- `GET /api/funds/:id/transactions` - Get fund transactions (also of an archived fund)
+- `GET /api/funds/total` - Total of the active funds in the caller's default currency
+- `POST /api/funds/transfer` - Transfer money between funds (400 when either is archived)
+
+An expense already on an archived fund can still be edited and deleted there (the refund goes back to the
+fund); `POST /api/cost` and moving an expense onto an archived fund answer 400.
 
 ### Analytics
 Web only. Every amount is in the caller's default currency, converted exactly as

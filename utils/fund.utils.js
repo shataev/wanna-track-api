@@ -17,7 +17,7 @@ async function findOwnedFund(id, userId) {
 }
 
 /**
- * Calculates the total amount across all user funds in the user's base currency
+ * Calculates the total amount across all user's active (not archived) funds in the user's base currency
  * @param {string|ObjectId} userId - User ID
  * @param {string} userCurrency - User's base currency (e.g., 'USD', 'THB')
  * @returns {Promise<{total: number, baseCurrency: string, fundsCount: number}|null>} - Object with total amount, currency and funds count, or null if exchange rates are not found
@@ -25,7 +25,8 @@ async function findOwnedFund(id, userId) {
 async function calculateTotalFundsAmount(userId, userCurrency = 'USD') {
     try {
         // Get all user funds
-        const funds = await Fund.find({ userId });
+        // Archived funds do not count in the total
+        const funds = await Fund.find({ userId, archivedAt: null });
 
         if (funds.length === 0) {
             return {
@@ -106,7 +107,11 @@ async function calculateTotalFundsAmount(userId, userCurrency = 'USD') {
     }
 }
 
+// A fund that is archived takes no new money: not an expense, not a transfer, not the default
+const isArchived = (fund) => Boolean(fund && fund.archivedAt);
+
 module.exports = {
+    isArchived,
     calculateTotalFundsAmount,
     findOwnedFund
 };

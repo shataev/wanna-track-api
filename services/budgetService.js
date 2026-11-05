@@ -50,7 +50,8 @@ const describeMonth = ({ year, month }) => {
         to,
         daysInMonth,
         elapsedDays,
-        pacePercent: round2(elapsedDays / daysInMonth * 100)
+        // Unrounded: the state is decided on it, the response shows it to two decimals
+        pacePercent: elapsedDays / daysInMonth * 100
     };
 };
 
@@ -143,7 +144,7 @@ const listBudgets = async (user, query = {}) => {
             dateTo: month.to,
             daysInMonth: month.daysInMonth,
             elapsedDays: month.elapsedDays,
-            pacePercent: month.pacePercent,
+            pacePercent: round2(month.pacePercent),
             budgets: await buildItems(user, budgets, month)
         }
     };

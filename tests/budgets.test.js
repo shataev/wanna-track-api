@@ -408,6 +408,13 @@ describe('state', () => {
         expect((await stateFor(434, NOV_10)).state).toBe('ahead');
     });
 
+    it('is on track at exactly the pace plus 10 points (day 3 of 30: 10 + 10 = 20%)', async () => {
+        const day3 = '2026-11-03T05:00:00Z';
+
+        expect((await stateFor(200, day3)).state).toBe('on_track');
+        expect((await stateFor(201, day3)).state).toBe('ahead');
+    });
+
     it('is ahead from 80% used whatever the pace, and still not over at exactly the limit', async () => {
         // The last day: pace 100, so only the 80% rule applies
         const lastDay = '2026-11-30T05:00:00Z';

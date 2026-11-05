@@ -8,6 +8,7 @@ const fundsRoute = require('./routes/fund');
 const exchangeRatesRoute = require('./routes/exchange-rates');
 const meRoute = require('./routes/me');
 const analyticsRoute = require('./routes/analytics');
+const budgetsRoute = require('./routes/budgets');
 const oauthRoute = require('./routes/oauth');
 const oauthGrantsRoute = require('./routes/oauth-grants');
 const sessionsRoute = require('./routes/sessions');
@@ -48,7 +49,7 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', authRoute);
 app.use('/api/telegram', telegramRoute);
-app.use('/api', [costRoute, categoryRoute, fundsRoute, meRoute, analyticsRoute, oauthGrantsRoute, sessionsRoute]);
+app.use('/api', [costRoute, categoryRoute, fundsRoute, meRoute, analyticsRoute, budgetsRoute, oauthGrantsRoute, sessionsRoute]);
 app.use('/api/verify', verifyRoute);
 app.use('/api/exchange-rates', exchangeRatesRoute);
 

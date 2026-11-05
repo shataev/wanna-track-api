@@ -4,7 +4,7 @@ const Cost = require('../models/Cost');
 const FundTransaction = require('../models/FundTransaction');
 const { getRatesObject } = require('./exchangeRateService');
 const { getConversionRate, roundToCurrencyPrecision } = require('../utils/currency.utils');
-const { findOwnedFund } = require('../utils/fund.utils');
+const { findOwnedFund, isArchived } = require('../utils/fund.utils');
 const { parseObjectId } = require('../utils/id.utils');
 const { isCategoryUsable } = require('../utils/category.utils');
 const { normalizeTags } = require('../utils/tag.utils');
@@ -154,6 +154,10 @@ const createCost = async (user, {
 
         if (!fund) {
             return { status: 404, error: 'Fund not found' };
+        }
+
+        if (isArchived(fund)) {
+            return { status: 400, error: 'Fund is archived' };
         }
     }
 

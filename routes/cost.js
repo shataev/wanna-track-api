@@ -6,7 +6,7 @@ const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
 const Category = require('../models/Category');
 const { authenticate, authenticateUserOrBot } = require('../middlewares/authenticate');
-const { findOwnedFund } = require('../utils/fund.utils');
+const { findOwnedFund, isArchived } = require('../utils/fund.utils');
 const { parseObjectId } = require('../utils/id.utils');
 const { normalizeTag, normalizeTags } = require('../utils/tag.utils');
 const { userCurrencyStages } = require('../utils/cost.utils');
@@ -341,6 +341,11 @@ router.patch('/cost/:id', authenticate, async (req, res) => {
 
             if (newFundId && !newFund) {
                 return res.status(404).json({ error: 'Fund not found' });
+            }
+
+            // An expense already on an archived fund may be edited there, but nothing is moved onto one
+            if (isArchived(newFund) && newFundId !== oldFundId) {
+                return res.status(400).json({ error: 'Fund is archived' });
             }
 
             // The rate is the one on the day of the expense; only another currency needs a new one

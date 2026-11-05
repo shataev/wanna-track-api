@@ -1,20 +1,30 @@
 const router = require('express').Router();
 const Fund = require('../models/Fund');
 const FundTransaction = require('../models/FundTransaction');
+const Cost = require('../models/Cost');
 const { authenticate, authenticateUserOrBot } = require('../middlewares/authenticate');
 const { getRatesObject } = require('../services/exchangeRateService');
-const { calculateTotalFundsAmount, findOwnedFund } = require('../utils/fund.utils');
+const { calculateTotalFundsAmount, findOwnedFund, isArchived } = require('../utils/fund.utils');
 const { getConversionRate, roundToCurrencyPrecision } = require('../utils/currency.utils');
 const { parseObjectId } = require('../utils/id.utils');
 
-// Get all user's funds
+// Get the user's active funds and their total; ?archived=true lists the archived ones instead (user only)
 router.get('/funds', authenticateUserOrBot, async (req, res) => {
     try {
         const userId = req.user.id;
 
-        let funds = await Fund.find({
-            userId: userId,
-        })
+        // The archive is for the web only: the bot sees active funds, as before
+        if (req.query.archived === 'true') {
+            if (req.auth !== 'user') {
+                return res.status(403).json({ error: 'Forbidden' });
+            }
+
+            const archivedFunds = await Fund.find({ userId, archivedAt: { $ne: null } }).sort({ archivedAt: -1 });
+
+            return res.status(200).json({ funds: archivedFunds });
+        }
+
+        const funds = await Fund.find({ userId, archivedAt: null });
 
         // Get user's base currency
         const userCurrency = req.user.defaultCurrency || 'USD';
@@ -90,6 +100,10 @@ router.put('/funds/:id', authenticate, async (req, res) => {
             return res.status(404).json({error: 'Fund is not found'});
         }
 
+        if (isDefault && isArchived(oldFund)) {
+            return res.status(400).json({error: 'Fund is archived'});
+        }
+
         const fund = await Fund.findOneAndUpdate(
             {_id: oldFund._id, userId: req.user.id},
             {name, description, currentBalance, icon, isDefault, currency},
@@ -118,10 +132,27 @@ router.put('/funds/:id', authenticate, async (req, res) => {
 
 // Delete fund
 router.delete('/funds/:id', authenticate, async (req, res) => {
-    const fundId = parseObjectId(req.params.id);
-
     try {
-        const fund = fundId && await Fund.findOneAndDelete({ _id: fundId, userId: req.user.id });
+        const owned = await findOwnedFund(req.params.id, req.user.id);
+
+        if (!owned) {
+            return res.status(404).json({ error: 'Fund not found' });
+        }
+
+        // Only a fund with no history can go: no cost on it and no transaction (creating a fund writes none)
+        const [cost, transaction] = await Promise.all([
+            Cost.exists({ fund: owned._id }),
+            FundTransaction.exists({ fundId: owned._id })
+        ]);
+
+        if (cost || transaction) {
+            return res.status(409).json({
+                error: 'The fund has history; archive it instead',
+                code: 'fund_has_history'
+            });
+        }
+
+        const fund = await Fund.findOneAndDelete({ _id: owned._id, userId: req.user.id });
 
         if (!fund) {
             return res.status(404).json({ error: 'Fund not found' });
@@ -134,6 +165,35 @@ router.delete('/funds/:id', authenticate, async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+// Archive / restore a fund: the money and the history stay, only the listing and the total change. Idempotent
+const setArchived = (archive) => async (req, res) => {
+    try {
+        const fund = await findOwnedFund(req.params.id, req.user.id);
+
+        if (!fund) {
+            return res.status(404).json({ error: 'Fund not found' });
+        }
+
+        // Already in the requested state: nothing to change, and an archive keeps its original date
+        if (isArchived(fund) === archive) {
+            return res.status(200).json(fund);
+        }
+
+        const update = archive
+            ? { $set: { archivedAt: new Date(), isDefault: false } }
+            : { $set: { archivedAt: null } };
+
+        const updated = await Fund.findOneAndUpdate({ _id: fund._id, userId: req.user.id }, update, { new: true });
+
+        res.status(200).json(updated);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+router.post('/funds/:id/archive', authenticate, setArchived(true));
+router.post('/funds/:id/restore', authenticate, setArchived(false));
 
 // Transfer funds between two funds
 router.post('/funds/transfer', 
@@ -170,6 +230,10 @@ router.post('/funds/transfer',
 
                 const fromFund = funds.find(fund => fund._id.equals(fromId));
                 const toFund = funds.find(fund => fund._id.equals(toId));
+
+                if (isArchived(fromFund) || isArchived(toFund)) {
+                    return res.status(400).json({error: 'An archived fund cannot take part in a transfer'});
+                }
 
                 if (fromFund.currentBalance < withdrawnAmount) {
                     return res.status(400).json({error: 'Insufficient amount of money in source fund'});
@@ -298,6 +362,7 @@ router.get('/funds/:id', authenticate, async (req, res) => {
             updatedAt: fund.updatedAt,
             isDefault: fund.isDefault,
             currency: fund.currency,
+            archivedAt: fund.archivedAt ?? null,
         });
     } catch (error) {
         console.error('Get fund error:', error);

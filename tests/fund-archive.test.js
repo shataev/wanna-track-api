@@ -48,7 +48,7 @@ describe('listing and the total', () => {
         const res = await request(app).get('/api/funds').set(as(a)).expect(200);
 
         expect(names(res)).toEqual(['Card']);
-        expect(res.body.total).toEqual({ amount: 1000, currency: 'THB', fundsCount: 1 });
+        expect(res.body.total).toEqual({ amount: 1000, available: 1000, saved: 0, currency: 'THB', fundsCount: 1 });
 
         const total = await request(app).get('/api/funds/total').set(as(a)).expect(200);
 

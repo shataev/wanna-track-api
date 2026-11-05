@@ -4,6 +4,7 @@ const Category = require('../models/Category');
 const Fund = require('../models/Fund');
 const { createCost, listCosts, listTags } = require('./costService');
 const { buildSummary, buildMonthly, BANGKOK_OFFSET_MS } = require('./analyticsService');
+const { listBudgets, setBudget, removeBudget, budgetForCost } = require('./budgetService');
 const { setActiveTag } = require('./userService');
 const { calculateTotalFundsAmount } = require('../utils/fund.utils');
 const { normalizeTag } = require('../utils/tag.utils');
@@ -23,6 +24,7 @@ const INSTRUCTIONS = `Wanna Track is the user's personal expense tracker.
 Every amount comes with its currency. "amountInUserCurrency" is converted to the user's default currency at the rate saved with the expense.
 ${TIMEZONE_NOTE}
 Funds are the user's accounts (cash, cards); an expense paid from a fund is debited from its balance, converted to the fund's currency.
+Categories can have a monthly limit (budget) in the default currency: it never blocks an expense, going over is only shown. get_budgets shows spent, remaining and state (on_track, ahead of pace, over) per limit; set_budget sets or removes one.
 Call get_profile first to learn the default currency, the active tag and today's date.`;
 
 const json = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
@@ -123,6 +125,19 @@ const summarizeCost = (cost, userCurrency) => {
     }
 
     return line;
+};
+
+// "Food: 2140 / 3000 THB · left 860", or "· over by 340"; empty when the budget has no figures
+const summarizeBudget = (budget) => {
+    if (budget.currencyMismatch) {
+        return '';
+    }
+
+    const used = `${budget.category.name}: ${budget.spent} / ${budget.limit} ${budget.currency}`;
+
+    return budget.remaining < 0
+        ? `${used} · over by ${-budget.remaining}`
+        : `${used} · left ${budget.remaining}`;
 };
 
 const registerReadTools = (server, user) => {
@@ -246,6 +261,19 @@ const registerReadTools = (server, user) => {
         return result.error ? toolError(result.error) : json(result.body);
     });
 
+    server.registerTool('get_budgets', {
+        title: 'Budgets',
+        description: 'The user\'s monthly category limits with what is spent against them in a Bangkok calendar month (default: the current one), in the user\'s default currency: limit, spent, remaining (negative when over), percent used, and state: on_track, ahead (spending faster than the month passes, or 80%+ used) or over. Also how far through the month we are (pacePercent). A limit never blocks an expense. A budget with currencyMismatch: true was set in another currency than the default one and has no figures until it is set again.',
+        inputSchema: {
+            month: z.string().optional().describe('YYYY-MM, default: the current month')
+        },
+        annotations: readOnly
+    }, async ({ month }) => {
+        const result = await listBudgets(user, { month });
+
+        return result.error ? toolError(result.error) : json(result.body);
+    });
+
     server.registerTool('get_monthly_trend', {
         title: 'Monthly trend',
         description: 'Totals per Bangkok calendar month for the last `months` months, the current month included, oldest first, each split by category; in the user\'s default currency. A month without expenses has total 0.',
@@ -321,7 +349,41 @@ const registerWriteTools = (server, user) => {
         const [saved] = await listCosts(user, { costId: result.cost._id });
         const expense = describeCost(saved);
 
-        return json({ summary: summarizeCost(expense, userCurrencyOf(user)), currency: userCurrencyOf(user), expense });
+        const budget = await budgetForCost(user, result.cost);
+
+        return json({
+            summary: summarizeCost(expense, userCurrencyOf(user)),
+            currency: userCurrencyOf(user),
+            expense,
+            ...(budget ? { budget, budgetSummary: summarizeBudget(budget) } : {})
+        });
+    });
+
+    server.registerTool('set_budget', {
+        title: 'Set a budget',
+        description: 'Set or change the monthly limit of a category, in the user\'s default currency; it applies to every month and never blocks an expense. amount 0 or null removes the limit. Returns the budget with this month\'s spending, or { removed } when removing.',
+        inputSchema: {
+            category: z.string().describe('Category name or id, see list_categories'),
+            amount: z.number().min(0).nullable().describe('The monthly limit; 0 or null removes it')
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    }, async ({ category, amount }) => {
+        const found = resolveByNameOrId(await findCategories(user), category, 'categories');
+
+        if (found.error) {
+            return toolError(found.error);
+        }
+
+        if (!amount) {
+            const removal = await removeBudget(user, found.item._id);
+
+            // Removing what is not there is not a failure
+            return removal.error && removal.status !== 404 ? toolError(removal.error) : json({ removed: !removal.error });
+        }
+
+        const result = await setBudget(user, found.item._id, amount);
+
+        return result.error ? toolError(result.error) : json(result.body);
     });
 
     server.registerTool('set_active_tag', {

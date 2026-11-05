@@ -512,3 +512,56 @@ describe('a read-only token cannot write', () => {
         expect((await User.findById(a.user._id)).activeTag).toBeNull();
     });
 });
+
+describe('archived funds', () => {
+    let client;
+
+    beforeEach(async () => {
+        await seedHistory();
+        await Fund.updateOne({ _id: a.card._id }, { archivedAt: new Date('2026-10-01T00:00:00Z') });
+        client = await mcpClient((await connect(a.user, { allowWrite: true })).tokens.access_token);
+    });
+
+    test('list_funds: active funds and their total only; includeArchived adds the archived, marked', async () => {
+        const { data } = await call(client, 'list_funds');
+
+        expect(data.funds.map(fund => fund.name)).toEqual(['Cash']);
+        expect(data.funds[0].archived).toBeUndefined();
+        expect(data.total).toEqual({ amount: 5000 - 120 - 40 - 365, currency: 'THB' });
+
+        const all = (await call(client, 'list_funds', { includeArchived: true })).data;
+
+        expect(all.funds.map(fund => [fund.name, fund.archived === true])).toEqual([['Card', true], ['Cash', false]]);
+        // The total stays that of the active funds
+        expect(all.total).toEqual(data.total);
+    });
+
+    test('list_funds does not show another user\'s archived fund even with includeArchived', async () => {
+        await Fund.updateOne({ _id: b.cash._id }, { archivedAt: new Date() });
+
+        const { text } = await call(client, 'list_funds', { includeArchived: true });
+
+        expect(text).not.toContain('B-secret-fund');
+    });
+
+    test('add_expense: an archived fund is not offered, nothing is written', async () => {
+        const before = await Cost.countDocuments();
+
+        const { result, text } = await call(client, 'add_expense', { amount: 5, category: 'Food', fund: 'Card' });
+
+        expect(result.isError).toBe(true);
+        expect(text).toContain('Unknown fund "Card"');
+        expect(await Cost.countDocuments()).toBe(before);
+        expect((await Fund.findById(a.card._id)).currentBalance).toBe(100);
+    });
+
+    test('list_expenses: an expense on an archived fund still names it and can be filtered by it', async () => {
+        await Fund.updateOne({ _id: a.card._id }, { archivedAt: null });
+        await restCost(a, a.card, a.food, { amount: 7, comment: 'Gum' });
+        await Fund.updateOne({ _id: a.card._id }, { archivedAt: new Date() });
+
+        const { data } = await call(client, 'list_expenses', { fund: 'Card' });
+
+        expect(data.expenses.map(cost => [cost.comment, cost.fund.name])).toEqual([['Gum', 'Card']]);
+    });
+});

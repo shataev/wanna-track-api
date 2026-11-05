@@ -66,7 +66,7 @@ const ROUTES = [
     },
     { name: 'GET /api/funds/:id', method: 'get', path: () => `/api/funds/${a.fund._id}`, bot: false },
     { name: 'PUT /api/funds/:id', method: 'put', path: () => `/api/funds/${a.fund._id}`, body: () => ({ name: 'Renamed', currentBalance: 1000 }), bot: false },
-    { name: 'DELETE /api/funds/:id', method: 'delete', path: () => `/api/funds/${a.fund._id}`, bot: false },
+    { name: 'DELETE /api/funds/:id', method: 'delete', path: () => `/api/funds/${a.otherFund._id}`, bot: false },
     { name: 'GET /api/funds/:id/transactions', method: 'get', path: () => `/api/funds/${a.fund._id}/transactions`, bot: false },
     { name: 'GET /api/telegram/telegram-binding-link', method: 'get', path: () => '/api/telegram/telegram-binding-link', bot: false },
     { name: 'POST /api/telegram/telegram-unbind', method: 'post', path: () => '/api/telegram/telegram-unbind', bot: false },

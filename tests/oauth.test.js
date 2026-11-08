@@ -182,7 +182,7 @@ describe('authorize', () => {
 
         expect(res.status).toBe(200);
         expect(res.text).toContain('claude.ai');
-        expect(res.text).toContain('Allow adding expenses and changing the active tag');
+        expect(res.text).toContain('Allow adding expenses, managing accounts (create, edit, transfer, archive, delete), budgets and the active tag');
         expect(nonceFrom(res.text)).toEqual(expect.any(String));
     });
 

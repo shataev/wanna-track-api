@@ -6,6 +6,7 @@ const { createCost, listCosts, listTags } = require('./costService');
 const { buildSummary, buildMonthly, BANGKOK_OFFSET_MS } = require('./analyticsService');
 const { listBudgets, setBudget, removeBudget, budgetForCost } = require('./budgetService');
 const { setActiveTag } = require('./userService');
+const { createFund, updateFund, deleteFund, setFundArchived, transferFunds } = require('./fundService');
 const { calculateTotalFundsAmount, goalProgress } = require('../utils/fund.utils');
 const { normalizeTag } = require('../utils/tag.utils');
 const { SCOPE_WRITE } = require('../utils/oauth.config');
@@ -26,6 +27,7 @@ ${TIMEZONE_NOTE}
 Funds are the user's accounts (cash, cards) and savings; an expense paid from a fund is debited from its balance, converted to the fund's currency.
 A fund has a kind: "account" (money to spend from) or "savings" (a separate real balance, such as a savings account for a trip). A savings fund may have a goal (amount in the fund's currency, optional date) with goalProgress (percent, remaining, monthsLeft, perMonth, reached). Spending from a savings fund is allowed; the total splits into available (accounts) and saved (savings).
 A fund the user no longer uses is archived: it is not listed by default (list_funds includeArchived shows it), is not in the total, and takes no new expenses, but its past expenses keep its name.
+Funds can be created, edited, archived, restored and moved between (transfer_funds) with the write tools; delete_fund only removes a fund with no history (no expenses, transfers or balance corrections) — anything else is archived instead.
 Categories can have a monthly limit (budget) in the default currency: it never blocks an expense, going over is only shown. get_budgets shows spent, remaining and state (on_track, ahead of pace, over) per limit; set_budget sets or removes one.
 Call get_profile first to learn the default currency, the active tag and today's date.`;
 
@@ -299,6 +301,244 @@ const registerReadTools = (server, user) => {
     });
 };
 
+
+const fundInput = {
+    icon: z.string().trim().min(1).max(100).optional().describe('Material Design Icons name such as "cash" or "mdi-piggy-bank", as on materialdesignicons.com'),
+    description: z.string().max(1000).optional().describe('A note about the fund'),
+    kind: z.enum(['account', 'savings']).optional().describe('"account": money to spend from (cash, a card). "savings": a separate real balance put aside, such as a savings account for a trip'),
+    goal: z.object({
+        amount: z.number().positive().describe('Target balance in the fund\'s currency'),
+        date: z.string().optional().describe(`Target date, optional. ${DATE_DESCRIPTION}`)
+    }).nullable().optional().describe('Savings funds only: a target amount and optional date; null removes the goal'),
+    isDefault: z.boolean().optional().describe('Preselected for new expenses on the web. Not allowed for a savings or archived fund')
+};
+
+const toIcon = (icon) => icon === undefined ? undefined : (icon.startsWith('mdi-') ? icon : `mdi-${icon}`);
+
+// The goal as the service reads it, with a bare date at Bangkok midnight; { error } for a bad date
+const toGoal = (goal) => {
+    if (goal === undefined || goal === null || goal.date === undefined) {
+        return { goal };
+    }
+
+    const date = parseInstant(goal.date);
+
+    return date ? { goal: { amount: goal.amount, date: date.toISOString() } } : { error: `goal.date is not a valid date: ${goal.date}` };
+};
+
+// "Cash: 5000 THB", plus the kind and state when they are not the usual ones
+const summarizeFund = (fund) => {
+    let line = `${fund.name}: ${fund.balance} ${fund.currency}`;
+
+    if (fund.kind === 'savings') {
+        line += ' · savings';
+
+        if (fund.goal) {
+            line += ` · goal ${fund.goal.amount} ${fund.currency}`;
+        }
+    }
+
+    if (fund.archived) {
+        line += ' · archived';
+    }
+
+    return line;
+};
+
+const fundResult = (fund, extra = {}) => {
+    const described = describeFund(fund);
+
+    return json({ summary: summarizeFund(described), ...extra, fund: described });
+};
+
+const registerFundTools = (server, user) => {
+    // Archived funds too: they can still be renamed, restored or deleted
+    const resolveFund = async (value) => resolveByNameOrId(await findFunds(user, { includeArchived: true }), value, 'funds');
+
+    server.registerTool('create_fund', {
+        title: 'Create a fund',
+        description: 'Create a fund: an account the user spends from (cash, a card, a bank account) or a savings fund (a separate balance put aside, optionally with a goal). The starting balance is what is on it now, in its currency. Returns the new fund.',
+        inputSchema: {
+            name: z.string().trim().min(1).max(200).describe('Name shown everywhere, e.g. "Cash" or "Japan trip"'),
+            currency: z.string().regex(/^[A-Za-z]{3}$/).optional().describe('Three-letter code of the money on it, such as THB. Default: the user\'s default currency'),
+            initialBalance: z.number().min(0).optional().describe('What is on it now, in its currency. Default 0'),
+            ...fundInput
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+    }, async ({ name, currency, initialBalance = 0, icon, description, kind, goal, isDefault }) => {
+        const parsedGoal = toGoal(goal);
+
+        if (parsedGoal.error) {
+            return toolError(parsedGoal.error);
+        }
+
+        const result = await createFund(user, {
+            name,
+            currency: (currency ?? userCurrencyOf(user)).toUpperCase(),
+            initialBalance,
+            icon: toIcon(icon),
+            description,
+            kind,
+            goal: parsedGoal.goal ?? undefined,
+            isDefault
+        });
+
+        return result.error ? toolError(result.error) : fundResult(result.fund);
+    });
+
+    server.registerTool('update_fund', {
+        title: 'Edit a fund',
+        description: 'Change a fund: name, icon, description, kind, savings goal, default flag, or its balance. Setting balance overwrites the current balance and is recorded as a manual correction in the fund\'s history — use it only to match the real account, not to move money (that is transfer_funds) or to record spending (that is add_expense). Only the fields given change. The currency cannot be changed. Returns the fund.',
+        inputSchema: {
+            fund: z.string().describe('Fund name (case-insensitive) or id, see list_funds; archived funds too'),
+            name: z.string().trim().min(1).max(200).optional().describe('New name'),
+            balance: z.number().optional().describe('The real current balance, in the fund\'s currency'),
+            ...fundInput
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+    }, async ({ fund, name, balance, icon, description, kind, goal, isDefault }) => {
+        const found = await resolveFund(fund);
+
+        if (found.error) {
+            return toolError(found.error);
+        }
+
+        const parsedGoal = toGoal(goal);
+
+        if (parsedGoal.error) {
+            return toolError(parsedGoal.error);
+        }
+
+        // A field not given stays undefined, and Mongoose leaves it out of the update
+        const result = await updateFund(user, found.item._id, {
+            name,
+            currentBalance: balance,
+            icon: toIcon(icon),
+            description,
+            kind,
+            goal: parsedGoal.goal,
+            isDefault
+        });
+
+        if (result.error) {
+            return toolError(result.error);
+        }
+
+        const change = result.fund.currentBalance - result.previousBalance;
+
+        return fundResult(result.fund, change !== 0 ? { balanceChange: { from: result.previousBalance, to: result.fund.currentBalance, currency: result.fund.currency } } : {});
+    });
+
+    server.registerTool('archive_fund', {
+        title: 'Archive a fund',
+        description: 'Archive a fund the user no longer uses: it disappears from the fund lists and the total, and takes no new expenses or transfers, but its balance and history are kept and its past expenses still name it. Any balance is allowed. restore_fund brings it back. Archiving the default fund clears that flag.',
+        inputSchema: {
+            fund: z.string().describe('Fund name (case-insensitive) or id, see list_funds')
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    }, async ({ fund }) => {
+        const found = await resolveFund(fund);
+
+        if (found.error) {
+            return toolError(found.error);
+        }
+
+        const result = await setFundArchived(user, found.item._id, true);
+
+        return result.error ? toolError(result.error) : fundResult(result.fund);
+    });
+
+    server.registerTool('restore_fund', {
+        title: 'Restore an archived fund',
+        description: 'Bring an archived fund back: it is listed and counted in the total again and can take expenses and transfers.',
+        inputSchema: {
+            fund: z.string().describe('Fund name (case-insensitive) or id, see list_funds with includeArchived')
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    }, async ({ fund }) => {
+        const found = await resolveFund(fund);
+
+        if (found.error) {
+            return toolError(found.error);
+        }
+
+        const result = await setFundArchived(user, found.item._id, false);
+
+        return result.error ? toolError(result.error) : fundResult(result.fund);
+    });
+
+    server.registerTool('delete_fund', {
+        title: 'Delete a fund',
+        description: 'Delete a fund for good. Only a fund with no history can be deleted: no expense paid from it, no transfer and no balance correction (for example one created by mistake). A fund with history is refused — offer archive_fund instead. Confirm with the user before deleting.',
+        inputSchema: {
+            fund: z.string().describe('Fund name (case-insensitive) or id, see list_funds')
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+    }, async ({ fund }) => {
+        const found = await resolveFund(fund);
+
+        if (found.error) {
+            return toolError(found.error);
+        }
+
+        const result = await deleteFund(user, found.item._id);
+
+        if (result.code === 'fund_has_history') {
+            return toolError(`"${found.item.name}" has history (expenses, transfers or balance corrections), so it cannot be deleted; archive_fund keeps the history and hides it.`);
+        }
+
+        return result.error ? toolError(result.error) : json({ deleted: { id: String(result.fund._id), name: result.fund.name } });
+    });
+
+    server.registerTool('transfer_funds', {
+        title: 'Move money between funds',
+        description: 'Move money from one of the user\'s funds to another, e.g. putting money aside into a savings fund or withdrawing cash from a card. The amount is in the source fund\'s currency; between currencies it is converted at today\'s rate and the credited amount is returned. The source must hold enough; archived funds cannot take part.',
+        inputSchema: {
+            from: z.string().describe('Source fund name (case-insensitive) or id'),
+            to: z.string().describe('Destination fund name (case-insensitive) or id'),
+            amount: z.number().positive().describe('How much leaves the source fund, in its currency'),
+            comment: z.string().max(1000).optional().describe('What the transfer is for')
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+    }, async ({ from, to, amount, comment }) => {
+        const funds = await findFunds(user, { includeArchived: true });
+        const source = resolveByNameOrId(funds, from, 'funds');
+
+        if (source.error) {
+            return toolError(source.error);
+        }
+
+        const target = resolveByNameOrId(funds, to, 'funds');
+
+        if (target.error) {
+            return toolError(target.error);
+        }
+
+        const result = await transferFunds(user, {
+            fromFundId: String(source.item._id),
+            toFundId: String(target.item._id),
+            amount,
+            description: comment
+        });
+
+        if (result.error) {
+            return toolError(result.error);
+        }
+
+        const { withdrawn, credited, rate } = result.body;
+        const [fromFund, toFund] = await Promise.all([Fund.findById(source.item._id), Fund.findById(target.item._id)]);
+        let summary = `${withdrawn.amount} ${withdrawn.currency}`;
+
+        if (credited.currency !== withdrawn.currency) {
+            summary += ` → ${credited.amount} ${credited.currency}`;
+        }
+
+        summary += ` · ${fromFund.name} → ${toFund.name}`;
+
+        return json({ summary, withdrawn, credited, rate, from: describeFund(fromFund), to: describeFund(toFund) });
+    });
+};
+
 const registerWriteTools = (server, user) => {
     server.registerTool('add_expense', {
         title: 'Add an expense',
@@ -422,6 +662,7 @@ const createMcpServer = (user, scopes) => {
 
     if (scopes.includes(SCOPE_WRITE)) {
         registerWriteTools(server, user);
+        registerFundTools(server, user);
     }
 
     return server;

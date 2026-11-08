@@ -18,7 +18,7 @@ const RATES = [['THB', 36.5], ['JPY', 149.3], ['EUR', 0.9]];
 const RAMEN_IN_THB = 366.71;
 
 const READ_TOOLS = ['get_budgets', 'get_monthly_trend', 'get_profile', 'get_summary', 'list_categories', 'list_expenses', 'list_funds', 'list_tags'];
-const WRITE_TOOLS = ['add_expense', 'set_active_tag', 'set_budget'];
+const WRITE_TOOLS = ['add_expense', 'archive_fund', 'create_fund', 'delete_fund', 'restore_fund', 'set_active_tag', 'set_budget', 'transfer_funds', 'update_fund'];
 
 // The MCP SDK's own client over HTTP against the real app, the way Claude talks to it
 let server;

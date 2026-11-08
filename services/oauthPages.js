@@ -123,7 +123,7 @@ ${hiddenFields(params)}
 <input type="hidden" name="nonce" value="${escapeHtml(nonce)}">
 ${offerWrite ? `<div class="check">
 <input id="allow_write" name="allow_write" type="checkbox" value="on">
-<label for="allow_write">Allow adding expenses and changing the active tag</label>
+<label for="allow_write">Allow adding expenses, managing accounts (create, edit, transfer, archive, delete), budgets and the active tag</label>
 </div>` : ''}
 <button class="primary" type="submit" name="decision" value="allow">Allow</button>
 <button class="secondary" type="submit" name="decision" value="deny">Cancel</button>

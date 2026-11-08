@@ -198,14 +198,17 @@ Claude connects as a custom connector: in claude.ai → Settings → Connectors 
 custom connector, URL `https://api.wannatrack.shataev.com/mcp` (Claude Code:
 `claude mcp add --transport http wanna-track https://api.wannatrack.shataev.com/mcp`).
 Claude registers itself, the user signs in on the API's own page and decides whether
-Claude may add expenses.
+Claude may change data (add expenses, manage funds and budgets).
 
 - `POST /mcp` - MCP over Streamable HTTP, stateless. Only an OAuth access token from
   `/oauth/token` is accepted (no JWT, no bot secret); without one: 401 with
   `WWW-Authenticate: Bearer resource_metadata=…, scope=…`. Tools: `get_profile`,
   `list_categories`, `list_funds`, `list_tags`, `list_expenses`, `get_summary`,
   `get_budgets`, `get_monthly_trend` (scope `expenses.read`), and `add_expense`,
-  `set_active_tag`, `set_budget` (amount 0 or null removes the limit)
+  `set_active_tag`, `set_budget` (amount 0 or null removes the limit), and for funds
+  `create_fund`, `update_fund` (a new `balance` is recorded as a manual adjustment; the
+  currency cannot change), `archive_fund`, `restore_fund`, `delete_fund` (only without
+  history, otherwise a tool error suggesting archive) and `transfer_funds`
   (scope `expenses.write`, not even listed without it). They use the same services as
   the REST routes, so amounts and totals match the web app.
 - `GET /.well-known/oauth-protected-resource[/mcp]`, `GET /.well-known/oauth-authorization-server` - Discovery
